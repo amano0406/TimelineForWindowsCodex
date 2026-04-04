@@ -1,0 +1,172 @@
+@page "/jobs"
+@model WindowsCodex2Timeline.Web.Pages.Jobs.IndexModel
+@using WindowsCodex2Timeline.Web.Infrastructure
+@using Microsoft.AspNetCore.WebUtilities
+@inject WindowsCodex2Timeline.Web.Services.LanguageService LanguageService
+@inject WindowsCodex2Timeline.Web.Services.JsonLocalizationService Localizer
+@{
+    var lang = LanguageService.Resolve(ViewContext.HttpContext.Request);
+    string L(string key) => Localizer.Get(lang, key);
+    string LinkWithLang(string href) => QueryHelpers.AddQueryString(href, "lang", lang);
+    ViewData["Title"] = L("jobs.list.page_title");
+
+    string StateLabel(string? value)
+    {
+        var key = $"state.{(value ?? string.Empty).ToLowerInvariant()}";
+        var label = L(key);
+        return label == key ? value ?? "-" : label;
+    }
+
+    string StageLabel(string? value)
+    {
+        var key = $"stage.{(value ?? string.Empty).ToLowerInvariant()}";
+        var label = L(key);
+        return label == key ? value ?? "-" : label;
+    }
+
+    string FormatCreatedAt(string? value) => DisplayFormatters.FormatCreatedAt(value);
+    string FormatDuration(double? valueSeconds) => valueSeconds.HasValue
+        ? DisplayFormatters.FormatDurationFriendly(valueSeconds, L)
+        : "-";
+    string PercentLabel(double value) => $"{Math.Round(value, 1):0.0}%";
+    string StateBadgeClass(string? value) => (value ?? string.Empty).ToLowerInvariant() switch
+    {
+        "running" => "status-badge status-badge-info",
+        "pending" => "status-badge status-badge-warning",
+        "completed" => "status-badge status-badge-success",
+        "failed" => "status-badge status-badge-danger",
+        _ => "status-badge status-badge-neutral",
+    };
+}
+
+<section class="app-page space-y-6">
+    <header class="panel page-header">
+        <div>
+            <p class="eyebrow">@L("jobs.list.eyebrow")</p>
+            <h1 class="page-title">@L("jobs.list.page_title")</h1>
+            <p class="page-description">@L("jobs.list.description")</p>
+        </div>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+    {
+        <section class="panel notice-panel">
+            @Model.StatusMessage
+        </section>
+    }
+
+    @if (Model.ActiveRun is not null)
+    {
+        <section class="panel">
+            <div class="mb-4 flex items-center justify-between gap-3">
+                <div>
+                    <p class="eyebrow">@L("jobs.list.active_eyebrow")</p>
+                    <h2 class="section-title">@L("jobs.list.active_title")</h2>
+                </div>
+            </div>
+
+            <div class="grid gap-4 xl:grid-cols-5">
+                <div class="metric-card xl:col-span-2">
+                    <div class="metric-label">@L("common.job")</div>
+                    <div class="metric-value">@Model.ActiveRun.JobId</div>
+                    <div class="metric-subtle">
+                        <span class="@StateBadgeClass(Model.ActiveRun.State)">@StateLabel(Model.ActiveRun.State)</span>
+                        <span class="ml-2">@StageLabel(Model.ActiveRun.CurrentStage)</span>
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.progress")</div>
+                    <div class="metric-value">@PercentLabel(Model.ActiveRun.ProgressPercent)</div>
+                    <div class="metric-subtle">@Model.ActiveRun.ThreadsDone / @Model.ActiveRun.ThreadsTotal @L("common.threads")</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.events")</div>
+                    <div class="metric-value">@Model.ActiveRun.EventsDone / @Model.ActiveRun.EventsTotal</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.elapsed")</div>
+                    <div class="metric-value">@FormatDuration(Model.ActiveRun.ElapsedWallSec)</div>
+                </div>
+            </div>
+
+            <div class="progress-track mt-4">
+                <div class="progress-fill" style="width:@(Model.ActiveRun.ProgressPercent.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+            </div>
+
+            <div class="mt-4">
+                <a class="btn-secondary" href="@LinkWithLang(JobUrls.Details(Model.ActiveRun.JobId))">@L("jobs.list.open_active")</a>
+            </div>
+        </section>
+    }
+
+    <section class="panel">
+        <div class="mb-4">
+            <p class="eyebrow">@L("jobs.list.history_eyebrow")</p>
+            <h2 class="section-title">@L("jobs.list.history_title")</h2>
+        </div>
+
+        <div class="table-shell">
+            <table class="app-table">
+                <thead>
+                    <tr>
+                        <th>@L("common.job")</th>
+                        <th>@L("common.state")</th>
+                        <th>@L("common.progress")</th>
+                        <th>@L("common.events")</th>
+                        <th>@L("common.created")</th>
+                        <th>@L("common.actions")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model.RecentRuns.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">@L("common.no_items")</td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var run in Model.RecentRuns)
+                        {
+                            <tr>
+                                <td>
+                                    <a class="table-link" href="@LinkWithLang(JobUrls.Details(run.JobId))">@run.JobId</a>
+                                </td>
+                                <td>
+                                    <span class="@StateBadgeClass(run.State)">@StateLabel(run.State)</span>
+                                    <div class="mt-2 text-xs text-slate-500">@StageLabel(run.CurrentStage)</div>
+                                </td>
+                                <td>
+                                    <div class="font-medium text-slate-900">@PercentLabel(run.ProgressPercent)</div>
+                                    <div class="mt-1 text-xs text-slate-500">@run.ThreadsDone / @run.ThreadsTotal @L("common.threads")</div>
+                                    <div class="progress-track mt-2">
+                                        <div class="progress-fill" style="width:@(run.ProgressPercent.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="font-medium text-slate-900">@run.EventsDone / @run.EventsTotal</div>
+                                    <div class="mt-1 text-xs text-slate-500">@FormatDuration(run.ElapsedWallSec)</div>
+                                </td>
+                                <td>@FormatCreatedAt(run.CreatedAt)</td>
+                                <td>
+                                    <div class="flex flex-wrap gap-2">
+                                        <a class="btn-table" href="@LinkWithLang(JobUrls.Details(run.JobId))">@L("common.details")</a>
+                                        @if (run.HasDownloadableArchive)
+                                        {
+                                            <a class="btn-table-success" href="@LinkWithLang(JobUrls.Download(run.JobId))">@L("common.zip")</a>
+                                        }
+                                        <form method="post" asp-page-handler="Delete" asp-route-lang="@lang" class="inline"
+                                              onsubmit="return confirm('@L("jobs.list.delete_confirm")');">
+                                            <input type="hidden" name="jobId" value="@run.JobId" />
+                                            <button class="btn-table-danger" type="submit">@L("common.delete")</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</section>

@@ -1,0 +1,41 @@
+name: windowscodex2timeline
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      WINDOWSCODEX2TIMELINE_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json
+      WINDOWSCODEX2TIMELINE_APPDATA_ROOT: /shared/app-data
+      WINDOWSCODEX2TIMELINE_OUTPUTS_ROOT: /shared/outputs
+    ports:
+      - "${HOST_WEB_PORT:-5845}:8080"
+    volumes:
+      - app-data:/shared/app-data
+      - outputs:/shared/outputs
+      - ${HOST_CODEX_HOME:-/mnt/c/Users/amano/.codex}:/input/codex-home:ro
+      - ${HOST_CODEX_BACKUP_HOME:-/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home}:/input/codex-backup:ro
+      - ${HOST_CODEX_ROOT:-/mnt/c/Codex}:/input/codex-root:ro
+    depends_on:
+      - worker
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    environment:
+      WINDOWSCODEX2TIMELINE_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json
+      WINDOWSCODEX2TIMELINE_APPDATA_ROOT: /shared/app-data
+      WINDOWSCODEX2TIMELINE_OUTPUTS_ROOT: /shared/outputs
+    volumes:
+      - app-data:/shared/app-data
+      - outputs:/shared/outputs
+      - ${HOST_CODEX_HOME:-/mnt/c/Users/amano/.codex}:/input/codex-home:ro
+      - ${HOST_CODEX_BACKUP_HOME:-/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home}:/input/codex-backup:ro
+      - ${HOST_CODEX_ROOT:-/mnt/c/Codex}:/input/codex-root:ro
+
+volumes:
+  app-data:
+  outputs:

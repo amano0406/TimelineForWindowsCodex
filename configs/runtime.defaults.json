@@ -1,0 +1,15 @@
+{
+  "default_primary_codex_home_path": "/input/codex-home",
+  "default_backup_codex_home_paths": [
+    "/input/codex-backup"
+  ],
+  "default_enrichment_root_paths": [
+    "/input/codex-root/reports",
+    "/input/codex-root/workspaces"
+  ],
+  "default_redaction_profile": "strict",
+  "default_include_archived_sources": true,
+  "default_include_tool_outputs": true,
+  "ui_language": "ja"
+}
+

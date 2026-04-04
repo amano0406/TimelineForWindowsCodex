@@ -1,0 +1,187 @@
+@page "/jobs/{id}"
+@model WindowsCodex2Timeline.Web.Pages.Jobs.DetailsModel
+@using WindowsCodex2Timeline.Web.Infrastructure
+@using Microsoft.AspNetCore.WebUtilities
+@inject WindowsCodex2Timeline.Web.Services.LanguageService LanguageService
+@inject WindowsCodex2Timeline.Web.Services.JsonLocalizationService Localizer
+@{
+    var lang = LanguageService.Resolve(ViewContext.HttpContext.Request);
+    string L(string key) => Localizer.Get(lang, key);
+    string LinkWithLang(string href) => QueryHelpers.AddQueryString(href, "lang", lang);
+    ViewData["Title"] = Model.Run is null ? L("details.page_title") : $"{L("details.page_title")} {Model.Run.JobId}";
+
+    string StateLabel(string? value)
+    {
+        var key = $"state.{(value ?? string.Empty).ToLowerInvariant()}";
+        var label = L(key);
+        return label == key ? value ?? "-" : label;
+    }
+
+    string StageLabel(string? value)
+    {
+        var key = $"stage.{(value ?? string.Empty).ToLowerInvariant()}";
+        var label = L(key);
+        return label == key ? value ?? "-" : label;
+    }
+
+    string FormatDuration(double? valueSeconds) => valueSeconds.HasValue
+        ? DisplayFormatters.FormatDurationFriendly(valueSeconds, L)
+        : "-";
+    string FormatCreatedAt(string? value) => DisplayFormatters.FormatCreatedAt(value);
+}
+
+@if (Model.Run is null)
+{
+    <section class="app-page space-y-6">
+        <header class="panel page-header">
+            <div>
+                <p class="eyebrow">windowscodex2timeline</p>
+                <h1 class="page-title">@L("details.not_found_title")</h1>
+                <p class="page-description">@L("details.not_found_description")</p>
+            </div>
+        </header>
+    </section>
+}
+else
+{
+    <section class="app-page space-y-6">
+        <header class="panel page-header">
+            <div>
+                <p class="eyebrow">@L("details.eyebrow")</p>
+                <h1 class="page-title">@Model.Run.JobId</h1>
+                <p class="page-description">@L("details.description")</p>
+            </div>
+        </header>
+
+        <section class="panel">
+            <div class="grid gap-4 xl:grid-cols-5">
+                <div class="metric-card xl:col-span-2">
+                    <div class="metric-label">@L("common.state")</div>
+                    <div class="metric-value">@StateLabel(Model.Run.Status?.State)</div>
+                    <div class="metric-subtle">@StageLabel(Model.Run.Status?.CurrentStage)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.progress")</div>
+                    <div class="metric-value">@((Model.Run.Status?.ProgressPercent ?? 0).ToString("0.0"))%</div>
+                    <div class="metric-subtle">@Model.Run.Status?.ThreadsDone / @Model.Run.Status?.ThreadsTotal @L("common.threads")</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.events")</div>
+                    <div class="metric-value">@Model.Run.Status?.EventsDone / @Model.Run.Status?.EventsTotal</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.elapsed")</div>
+                    <div class="metric-value">@FormatDuration(Model.Run.ElapsedWallSec)</div>
+                </div>
+            </div>
+
+            <div class="progress-track mt-4">
+                <div class="progress-fill" style="width:@((Model.Run.Status?.ProgressPercent ?? 0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="flex flex-wrap gap-3">
+                @if (!string.IsNullOrWhiteSpace(Model.Run.ArchivePath) && System.IO.File.Exists(Model.Run.ArchivePath))
+                {
+                    <a class="btn-primary" href="@LinkWithLang(JobUrls.Download(Model.Run.JobId))">@L("common.zip")</a>
+                }
+                <a class="btn-secondary" href="@LinkWithLang("/jobs")">@L("common.back_to_jobs")</a>
+            </div>
+        </section>
+
+        <div class="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+            <section class="panel space-y-4">
+                <div>
+                    <h2 class="section-title">@L("details.request_title")</h2>
+                    <p class="text-sm text-slate-600">@Model.Run.RunDirectory</p>
+                </div>
+
+                <dl class="grid gap-3 text-sm text-slate-700">
+                    <div>
+                        <dt class="font-medium text-slate-900">@L("jobs.new.primary_root")</dt>
+                        <dd class="mt-1 break-all">@Model.Run.Request?.PrimaryCodexHomePath</dd>
+                    </div>
+                    <div>
+                        <dt class="font-medium text-slate-900">@L("jobs.new.backup_roots")</dt>
+                        <dd class="mt-1 whitespace-pre-wrap">@(string.Join(Environment.NewLine, Model.Run.Request?.BackupCodexHomePaths ?? []))</dd>
+                    </div>
+                    <div>
+                        <dt class="font-medium text-slate-900">@L("jobs.new.redaction")</dt>
+                        <dd class="mt-1">@Model.Run.Request?.RedactionProfile</dd>
+                    </div>
+                    <div>
+                        <dt class="font-medium text-slate-900">@L("common.created")</dt>
+                        <dd class="mt-1">@FormatCreatedAt(Model.Run.Request?.CreatedAt)</dd>
+                    </div>
+                </dl>
+            </section>
+
+            <section class="panel space-y-4">
+                <div>
+                    <h2 class="section-title">@L("details.manifest_title")</h2>
+                    <p class="text-sm text-slate-600">@L("details.manifest_description")</p>
+                </div>
+
+                <div class="space-y-3">
+                    @foreach (var item in Model.Run.ManifestItems)
+                    {
+                        <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <div class="font-medium text-slate-950">@item.PreferredTitle</div>
+                                <span class="status-badge status-badge-neutral">@item.Status</span>
+                            </div>
+                            <div class="mt-2 text-xs text-slate-500">@item.ThreadId</div>
+                            <div class="mt-2 text-sm text-slate-600">@item.SourceRootPath</div>
+                            @if (!string.IsNullOrWhiteSpace(item.TimelinePath))
+                            {
+                                <div class="mt-2 text-sm text-slate-600">@item.TimelinePath</div>
+                            }
+                            <div class="mt-2 text-sm text-slate-600">@item.EventCount @L("common.events")</div>
+                        </article>
+                    }
+                </div>
+            </section>
+        </div>
+
+        <section class="panel space-y-4">
+            <div>
+                <h2 class="section-title">@L("details.timelines_title")</h2>
+                <p class="text-sm text-slate-600">@L("details.timelines_description")</p>
+            </div>
+
+            @if (Model.Run.TimelineItems.Count == 0)
+            {
+                <div class="selection-empty">@L("details.no_timelines")</div>
+            }
+            else
+            {
+                <div class="space-y-4">
+                    @foreach (var item in Model.Run.TimelineItems)
+                    {
+                        <article class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <div class="font-medium text-slate-950">@item.PreferredTitle</div>
+                                    <div class="mt-1 text-xs text-slate-500">@item.ThreadId</div>
+                                </div>
+                                <div class="text-xs text-slate-500">@item.TimelinePath</div>
+                            </div>
+                            <pre class="mt-4 overflow-x-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">@item.Preview</pre>
+                        </article>
+                    }
+                </div>
+            }
+        </section>
+    </section>
+}
+
+@if (Model.ShouldAutoRefresh)
+{
+    @section Scripts
+    {
+        <script>
+            setTimeout(() => location.reload(), 5000);
+        </script>
+    }
+}

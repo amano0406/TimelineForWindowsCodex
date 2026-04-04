@@ -1,0 +1,15 @@
+{
+  "defaultLanguage": "ja",
+  "languages": [
+    {
+      "code": "ja",
+      "nativeName": "日本語",
+      "aliases": ["ja", "ja-jp"]
+    },
+    {
+      "code": "en",
+      "nativeName": "English",
+      "aliases": ["en", "en-us", "en-gb"]
+    }
+  ]
+}
