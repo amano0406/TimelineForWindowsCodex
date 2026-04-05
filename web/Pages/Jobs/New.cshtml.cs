@@ -121,7 +121,7 @@ public sealed class NewModel(
             ? "/input/codex-home"
             : PrimaryCodexHomePath.Trim();
         var backups = ParseLines(BackupCodexHomePathsText);
-        DiscoveredThreads = await discoveryService.DiscoverAsync(primary, backups, cancellationToken);
+        DiscoveredThreads = await discoveryService.DiscoverAsync(primary, backups, IncludeArchivedSources, cancellationToken);
     }
 
     private static string? NormalizeDate(string? value) =>

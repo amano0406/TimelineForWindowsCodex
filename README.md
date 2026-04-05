@@ -64,14 +64,14 @@ Not fully verified in this environment:
 
 Included:
 
-- thread discovery from `session_index.jsonl` plus session JSONL files
+- thread discovery from `session_index.jsonl`, `state_5.sqlite`, session JSONL files, and archived `thread_reads`
 - run creation from selected thread ids
-- basic worker rendering for one or more threads
+- basic worker rendering for one or more threads, including archived `thread_reads`
 - ZIP export
 
 Deferred:
 
-- full `thread/read` import
+- richer `thread/read` item coverage beyond message / reasoning / plan / compaction
 - rich file-edit extraction
 - advanced segmenting
 - full artifact auto-linking

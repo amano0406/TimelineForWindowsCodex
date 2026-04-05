@@ -7,6 +7,8 @@ namespace WindowsCodex2Timeline.Web.Services;
 
 public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService> logger)
 {
+    private readonly ILogger<CodexDiscoveryService> _logger = logger;
+
     private sealed class MutableThread
     {
         public string ThreadId { get; init; } = "";
@@ -24,6 +26,7 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
     public async Task<IReadOnlyList<DiscoveredThreadDocument>> DiscoverAsync(
         string primaryRootPath,
         IEnumerable<string> backupRootPaths,
+        bool includeArchivedSources = true,
         CancellationToken cancellationToken = default)
     {
         var roots = new List<(string Path, string Kind, int Priority)>();
@@ -47,7 +50,12 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
         {
             cancellationToken.ThrowIfCancellationRequested();
             await MergeSessionIndexAsync(root.Path, root.Kind, root.Priority, threads, cancellationToken);
-            await MergeSessionFilesAsync(root.Path, root.Kind, root.Priority, threads, cancellationToken);
+            await MergeStateCatalogAsync(root.Path, root.Kind, root.Priority, threads, cancellationToken);
+            await MergeSessionFilesAsync(root.Path, root.Kind, root.Priority, threads, includeArchivedSources, cancellationToken);
+            if (includeArchivedSources)
+            {
+                await MergeThreadReadFilesAsync(root.Path, root.Kind, root.Priority, threads, cancellationToken);
+            }
         }
 
         return threads.Values
@@ -128,7 +136,7 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Skipping unreadable session index row from {SessionIndexPath}", sessionIndexPath);
+                _logger.LogWarning(ex, "Skipping unreadable session index row from {SessionIndexPath}", sessionIndexPath);
             }
         }
 
@@ -140,6 +148,7 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
         string rootKind,
         int priority,
         Dictionary<string, MutableThread> threads,
+        bool includeArchivedSources,
         CancellationToken cancellationToken)
     {
         var paths = new List<string>();
@@ -150,7 +159,7 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
         }
 
         var archivedSessionsRoot = Path.Combine(rootPath, "archived_sessions");
-        if (Directory.Exists(archivedSessionsRoot))
+        if (includeArchivedSources && Directory.Exists(archivedSessionsRoot))
         {
             paths.AddRange(Directory.EnumerateFiles(archivedSessionsRoot, "*.jsonl", SearchOption.TopDirectoryOnly));
         }
@@ -167,7 +176,9 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
                 }
 
                 var thread = GetOrCreate(preview.ThreadId!, rootPath, rootKind, priority, threads);
-                if (priority <= thread.Priority || string.IsNullOrWhiteSpace(thread.SessionPath))
+                if (priority < thread.Priority ||
+                    string.IsNullOrWhiteSpace(thread.SessionPath) ||
+                    !File.Exists(thread.SessionPath))
                 {
                     thread.SourceRootPath = rootPath;
                     thread.SourceRootKind = rootKind;
@@ -190,7 +201,7 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Skipping unreadable session file {SessionPath}", sessionPath);
+                _logger.LogWarning(ex, "Skipping unreadable session file {SessionPath}", sessionPath);
             }
         }
     }

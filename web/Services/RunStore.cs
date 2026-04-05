@@ -23,6 +23,7 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
         var discovered = await discoveryService.DiscoverAsync(
             command.PrimaryCodexHomePath,
             command.BackupCodexHomePaths,
+            command.IncludeArchivedSources,
             cancellationToken);
 
         var selectedIds = command.SelectedThreadIds

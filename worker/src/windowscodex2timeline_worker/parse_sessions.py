@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -123,13 +123,7 @@ def resolve_thread_session_path(thread: ThreadSelection) -> Path | None:
     if not source_root.exists():
         return None
 
-    candidate_roots = [
-        source_root / "sessions",
-        source_root / "archived_sessions",
-    ]
-    pattern = f"*{thread.thread_id}*.jsonl"
-
-    for candidate_root in candidate_roots:
+    for candidate_root, pattern in _candidate_source_roots(source_root, thread.thread_id):
         if not candidate_root.exists():
             continue
 
@@ -148,10 +142,69 @@ def parse_thread_events(
     date_from: str | None,
     date_to: str | None,
 ) -> list[dict[str, Any]]:
-    session_path = resolve_thread_session_path(thread)
-    if session_path is None:
+    source_path = resolve_thread_session_path(thread)
+    if source_path is None:
         return []
 
+    if source_path.suffix.lower() == ".json":
+        return _parse_thread_read_events(
+            source_path,
+            thread,
+            redaction_profile=redaction_profile,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    return _parse_session_jsonl_events(
+        source_path,
+        thread,
+        include_tool_outputs=include_tool_outputs,
+        redaction_profile=redaction_profile,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+def _candidate_source_roots(source_root: Path, thread_id: str) -> list[tuple[Path, str]]:
+    roots: list[tuple[Path, str]] = [
+        (source_root / "sessions", f"*{thread_id}*.jsonl"),
+        (source_root / "archived_sessions", f"*{thread_id}*.jsonl"),
+    ]
+
+    if source_root.name.lower() == "sessions":
+        roots.append((source_root, f"*{thread_id}*.jsonl"))
+    if source_root.name.lower() == "archived_sessions":
+        roots.append((source_root, f"*{thread_id}*.jsonl"))
+
+    for candidate in [
+        source_root / "thread_reads",
+        source_root / "_codex_tools" / "thread_reads",
+    ]:
+        roots.append((candidate, f"{thread_id}.json"))
+
+    if source_root.name.lower() == "thread_reads":
+        roots.append((source_root, f"{thread_id}.json"))
+
+    deduped: list[tuple[Path, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate_root, pattern in roots:
+        key = (str(candidate_root), pattern)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((candidate_root, pattern))
+    return deduped
+
+
+def _parse_session_jsonl_events(
+    session_path: Path,
+    thread: ThreadSelection,
+    *,
+    include_tool_outputs: bool,
+    redaction_profile: str,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     sequence = 0
 
@@ -312,3 +365,213 @@ def parse_thread_events(
             rows.append(event)
 
     return rows
+
+
+def _parse_thread_read_events(
+    source_path: Path,
+    thread: ThreadSelection,
+    *,
+    redaction_profile: str,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict[str, Any]]:
+    payload_root = json.loads(source_path.read_text(encoding="utf-8", errors="replace"))
+    thread_payload = _extract_thread_read_thread(payload_root)
+    if not isinstance(thread_payload, dict):
+        return []
+
+    base_timestamp = _coerce_timestamp(
+        thread_payload.get("createdAt"),
+        fallback=thread_payload.get("updatedAt"),
+    )
+    sequence = 0
+    rows: list[dict[str, Any]] = []
+
+    def append_event(event: dict[str, Any] | None) -> None:
+        nonlocal sequence
+        if not event:
+            return
+
+        sequence += 1
+        timestamp = _offset_timestamp(base_timestamp, sequence - 1)
+        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
+            return
+
+        event["timestamp"] = timestamp
+        event["sequence"] = sequence
+        event["thread_id"] = thread.thread_id
+        if event.get("text"):
+            rows.append(event)
+
+    append_event(
+        {
+            "actor": "system",
+            "kind": "session_meta",
+            "phase": "meta",
+            "cwd": sanitize_text(
+                str(thread_payload.get("cwd") or ""),
+                profile=redaction_profile,
+                max_length=400,
+            ),
+            "text": sanitize_text(
+                " ".join(
+                    [
+                        f"cwd={thread_payload.get('cwd') or ''}",
+                        f"cli={thread_payload.get('cliVersion') or ''}",
+                        f"source={thread_payload.get('source') or ''}",
+                        f"path={thread_payload.get('path') or ''}",
+                    ]
+                ),
+                profile=redaction_profile,
+                max_length=400,
+            ),
+        }
+    )
+
+    turns = thread_payload.get("turns")
+    if not isinstance(turns, list):
+        return rows
+
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        items = turn.get("items")
+        if not isinstance(items, list):
+            continue
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "")
+            if item_type == "userMessage":
+                append_event(
+                    {
+                        "actor": "user",
+                        "kind": "message",
+                        "phase": "conversation",
+                        "text": sanitize_text(
+                            _extract_thread_read_user_text(item),
+                            profile=redaction_profile,
+                        ),
+                    }
+                )
+            elif item_type == "agentMessage":
+                append_event(
+                    {
+                        "actor": "assistant",
+                        "kind": "message",
+                        "phase": str(item.get("phase") or "conversation"),
+                        "text": sanitize_text(
+                            str(item.get("text") or ""),
+                            profile=redaction_profile,
+                        ),
+                    }
+                )
+            elif item_type == "reasoning":
+                append_event(
+                    {
+                        "actor": "assistant",
+                        "kind": "reasoning",
+                        "phase": "commentary",
+                        "text": sanitize_text(
+                            _extract_thread_read_reasoning_text(item),
+                            profile=redaction_profile,
+                            max_length=1200,
+                        ),
+                    }
+                )
+            elif item_type == "plan":
+                append_event(
+                    {
+                        "actor": "assistant",
+                        "kind": "plan",
+                        "phase": "planning",
+                        "text": sanitize_text(
+                            str(item.get("text") or ""),
+                            profile=redaction_profile,
+                            max_length=2400,
+                        ),
+                    }
+                )
+            elif item_type == "contextCompaction":
+                append_event(
+                    {
+                        "actor": "system",
+                        "kind": "context_compaction",
+                        "phase": "compaction",
+                        "text": "Context compacted.",
+                    }
+                )
+
+    return rows
+
+
+def _extract_thread_read_thread(payload_root: dict[str, Any]) -> dict[str, Any]:
+    result = payload_root.get("result")
+    if isinstance(result, dict):
+        thread = result.get("thread")
+        if isinstance(thread, dict):
+            return thread
+
+    thread = payload_root.get("thread")
+    if isinstance(thread, dict):
+        return thread
+
+    return payload_root if isinstance(payload_root, dict) else {}
+
+
+def _extract_thread_read_user_text(item: dict[str, Any]) -> str:
+    if isinstance(item.get("text"), str):
+        return str(item.get("text") or "")
+
+    content = item.get("content")
+    if not isinstance(content, list):
+        return ""
+
+    parts: list[str] = []
+    for content_item in content:
+        if not isinstance(content_item, dict):
+            continue
+        if isinstance(content_item.get("text"), str):
+            parts.append(str(content_item.get("text") or ""))
+
+    return " ".join(parts)
+
+
+def _extract_thread_read_reasoning_text(item: dict[str, Any]) -> str:
+    summary = item.get("summary")
+    if not isinstance(summary, list):
+        return ""
+
+    parts: list[str] = []
+    for summary_item in summary:
+        if isinstance(summary_item, str):
+            parts.append(summary_item)
+        elif isinstance(summary_item, dict) and isinstance(summary_item.get("text"), str):
+            parts.append(str(summary_item.get("text") or ""))
+    return " ".join(parts)
+
+
+def _coerce_timestamp(value: Any, *, fallback: Any = None) -> str | None:
+    for candidate in (value, fallback):
+        if isinstance(candidate, (int, float)):
+            return datetime.fromtimestamp(float(candidate), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        if isinstance(candidate, str) and candidate.strip():
+            text = candidate.strip()
+            if text.isdigit():
+                return datetime.fromtimestamp(float(text), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            try:
+                return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            except ValueError:
+                continue
+    return None
+
+
+def _offset_timestamp(base_timestamp: str | None, offset_seconds: int) -> str | None:
+    if not base_timestamp:
+        return None
+    try:
+        base_dt = datetime.fromisoformat(base_timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return base_timestamp
+    return (base_dt + timedelta(seconds=offset_seconds)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

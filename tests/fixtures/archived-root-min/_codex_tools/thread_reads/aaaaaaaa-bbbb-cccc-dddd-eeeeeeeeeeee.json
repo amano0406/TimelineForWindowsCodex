@@ -1,0 +1,68 @@
+{
+  "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "result": {
+    "thread": {
+      "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "preview": "Summarize follow-up for archived@example.com with token=legacy-secret",
+      "ephemeral": false,
+      "modelProvider": "openai",
+      "createdAt": 1775102400,
+      "updatedAt": 1775102460,
+      "path": "C:\\Users\\amano\\.codex\\thread_reads\\aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json",
+      "cwd": "c:\\apps\\windowscodex2timeline",
+      "cliVersion": "0.100.0-alpha.1",
+      "source": "desktop",
+      "name": "Archived timeline source",
+      "turns": [
+        {
+          "id": "turn-001",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "item-1",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Summarize follow-up for archived@example.com with token=legacy-secret"
+                }
+              ]
+            },
+            {
+              "type": "reasoning",
+              "id": "item-2",
+              "summary": [
+                "**Checking archived context**"
+              ],
+              "content": []
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-3",
+              "text": "I am checking the archived thread and preparing a handoff.",
+              "phase": "commentary"
+            },
+            {
+              "type": "plan",
+              "id": "item-4",
+              "text": "1. Inspect the archived thread.\n2. Summarize the next action.\n3. Export the timeline."
+            },
+            {
+              "type": "contextCompaction",
+              "id": "item-5"
+            },
+            {
+              "type": "agentMessage",
+              "id": "item-6",
+              "text": "Archived thread summary is ready.",
+              "phase": "conversation"
+            }
+          ],
+          "status": {
+            "type": "ok"
+          },
+          "error": null
+        }
+      ]
+    }
+  }
+}

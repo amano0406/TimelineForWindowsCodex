@@ -19,6 +19,8 @@ from windowscodex2timeline_worker.processor import process_job  # noqa: E402
 
 FIXTURE_CODEX_HOME = REPO_ROOT / "tests" / "fixtures" / "codex-home-min"
 FIXTURE_THREAD_ID = "11111111-2222-3333-4444-555555555555"
+ARCHIVED_FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "archived-root-min"
+ARCHIVED_THREAD_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 
 class ProcessJobIntegrationTests(unittest.TestCase):
@@ -26,7 +28,14 @@ class ProcessJobIntegrationTests(unittest.TestCase):
 
     def test_process_job_builds_redacted_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            job_dir = self._create_job_dir(Path(temp_dir), include_tool_outputs=True)
+            job_dir = self._create_job_dir(
+                Path(temp_dir),
+                fixture_root=FIXTURE_CODEX_HOME,
+                thread_id=FIXTURE_THREAD_ID,
+                preferred_title="Codex timeline sample thread",
+                first_prompt_excerpt="Please summarize the last week of work for [email].",
+                include_tool_outputs=True,
+            )
 
             process_job(job_dir)
 
@@ -68,6 +77,10 @@ class ProcessJobIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             job_dir = self._create_job_dir(
                 Path(temp_dir),
+                fixture_root=FIXTURE_CODEX_HOME,
+                thread_id=FIXTURE_THREAD_ID,
+                preferred_title="Codex timeline sample thread",
+                first_prompt_excerpt="Please summarize the last week of work for [email].",
                 include_tool_outputs=True,
                 date_from="2026-04-04",
                 date_to="2026-04-04",
@@ -86,10 +99,40 @@ class ProcessJobIntegrationTests(unittest.TestCase):
             self.assertEqual(combined_events, [])
             self.assertIn("No events were available for the selected filters.", timeline_text)
 
+    def test_process_job_parses_archived_thread_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = self._create_job_dir(
+                Path(temp_dir),
+                fixture_root=ARCHIVED_FIXTURE_ROOT,
+                thread_id=ARCHIVED_THREAD_ID,
+                preferred_title="Archived timeline source",
+                first_prompt_excerpt="Summarize follow-up for [email] with token=[redacted]",
+                include_tool_outputs=True,
+            )
+
+            process_job(job_dir)
+
+            result = read_json(job_dir / "result.json")
+            combined_events = self._read_jsonl(job_dir / "normalized" / "events.jsonl")
+            timeline_text = (job_dir / "threads" / ARCHIVED_THREAD_ID / "timeline.md").read_text(encoding="utf-8")
+
+            self.assertEqual(result["state"], "completed")
+            self.assertEqual(result["thread_count"], 1)
+            self.assertGreaterEqual(result["event_count"], 6)
+            rendered_payload = json.dumps(combined_events, ensure_ascii=False)
+            self.assertIn("[email]", rendered_payload)
+            self.assertIn("token=[redacted]", rendered_payload)
+            self.assertIn("Context compacted.", timeline_text)
+            self.assertIn("Inspect the archived thread.", timeline_text)
+
     def _create_job_dir(
         self,
         temp_root: Path,
         *,
+        fixture_root: Path,
+        thread_id: str,
+        preferred_title: str,
+        first_prompt_excerpt: str,
         include_tool_outputs: bool,
         date_from: str | None = None,
         date_to: str | None = None,
@@ -105,7 +148,7 @@ class ProcessJobIntegrationTests(unittest.TestCase):
         request = JobRequest(
             job_id="run-fixture",
             created_at="2026-04-05T00:00:00Z",
-            primary_codex_home_path=str(FIXTURE_CODEX_HOME),
+            primary_codex_home_path=str(fixture_root),
             backup_codex_home_paths=[],
             include_archived_sources=True,
             include_tool_outputs=include_tool_outputs,
@@ -114,13 +157,13 @@ class ProcessJobIntegrationTests(unittest.TestCase):
             date_to=date_to,
             selected_threads=[
                 ThreadSelection(
-                    thread_id=FIXTURE_THREAD_ID,
-                    preferred_title="Codex timeline sample thread",
-                    source_root_path=str(FIXTURE_CODEX_HOME),
+                    thread_id=thread_id,
+                    preferred_title=preferred_title,
+                    source_root_path=str(fixture_root),
                     source_root_kind="primary",
                     session_path="",
                     updated_at="2026-04-03T09:12:40Z",
-                    first_user_message_excerpt="Please summarize the last week of work for [email].",
+                    first_user_message_excerpt=first_prompt_excerpt,
                 )
             ],
         )

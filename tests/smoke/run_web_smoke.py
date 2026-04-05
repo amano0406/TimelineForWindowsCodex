@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,9 @@ WEB_DLL = REPO_ROOT / "web" / "bin" / "Debug" / "net10.0" / "WindowsCodex2Timeli
 WORKER_SRC = REPO_ROOT / "worker" / "src"
 FIXTURE_CODEX_HOME = REPO_ROOT / "tests" / "fixtures" / "codex-home-min"
 THREAD_TITLE = "Codex timeline sample thread"
+ARCHIVED_FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "archived-root-min"
+ARCHIVED_THREAD_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+ARCHIVED_THREAD_TITLE = "Archived timeline source"
 
 TOKEN_RE = re.compile(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', re.IGNORECASE)
 THREAD_RE = re.compile(r'name="SelectedThreadIds"[^>]*value="([^"]+)"', re.IGNORECASE)
@@ -35,7 +40,11 @@ def main() -> int:
 
     ensure_tmp_root()
 
-    with tempfile.TemporaryDirectory(dir=str(REPO_ROOT / ".tmp"), prefix="web-smoke-") as temp_root:
+    with tempfile.TemporaryDirectory(
+        dir=str(REPO_ROOT / ".tmp"),
+        prefix="web-smoke-",
+        ignore_cleanup_errors=True,
+    ) as temp_root:
         temp_root_path = Path(temp_root)
         runtime_defaults_path = temp_root_path / "runtime.defaults.json"
         app_data_root = temp_root_path / "app-data"
@@ -158,33 +167,77 @@ def wait_for_server(base_url: str, process: subprocess.Popen[str], log_path: Pat
 
 def run_smoke_flow(*, base_url: str, temp_root: Path, outputs_root: Path) -> None:
     cookie_jar = temp_root / "cookies.txt"
+    state_catalog_root = create_state_catalog_root(temp_root)
 
+    run_execute_flow(
+        base_url=base_url,
+        temp_root=temp_root,
+        outputs_root=outputs_root,
+        cookie_jar=cookie_jar,
+        primary_root=FIXTURE_CODEX_HOME,
+        expected_title=THREAD_TITLE,
+        expected_thread_id="11111111-2222-3333-4444-555555555555",
+        artifact_prefix="session",
+    )
+    run_execute_flow(
+        base_url=base_url,
+        temp_root=temp_root,
+        outputs_root=outputs_root,
+        cookie_jar=cookie_jar,
+        primary_root=state_catalog_root,
+        expected_title=ARCHIVED_THREAD_TITLE,
+        expected_thread_id=ARCHIVED_THREAD_ID,
+        artifact_prefix="state-catalog",
+    )
+
+
+def run_execute_flow(
+    *,
+    base_url: str,
+    temp_root: Path,
+    outputs_root: Path,
+    cookie_jar: Path,
+    primary_root: Path,
+    expected_title: str,
+    expected_thread_id: str,
+    artifact_prefix: str,
+) -> None:
     new_html, new_url = fetch_text(
         url=f"{base_url}/jobs/new?lang=en",
         cookie_jar=cookie_jar,
-        response_body_path=temp_root / "jobs-new.html",
+        response_body_path=temp_root / f"{artifact_prefix}-jobs-new.html",
     )
-    if THREAD_TITLE not in new_html:
-        raise AssertionError("Thread discovery did not render the fixture thread.")
+
+    if expected_title not in new_html or to_windows_path(primary_root) != to_windows_path(FIXTURE_CODEX_HOME):
+        refresh_url = post_form(
+            url=f"{base_url}/jobs/new?handler=Refresh&lang=en",
+            cookie_jar=cookie_jar,
+            response_body_path=temp_root / f"{artifact_prefix}-jobs-refresh.html",
+            fields=refresh_fields(
+                token=first_match(TOKEN_RE, new_html, "__RequestVerificationToken"),
+                primary_root=primary_root,
+            ),
+        )
+        new_html = (temp_root / f"{artifact_prefix}-jobs-refresh.html").read_text(encoding="utf-8", errors="replace")
+        new_url = refresh_url
+
+    if expected_title not in new_html:
+        raise AssertionError(f"Thread discovery did not render {expected_title}.")
 
     token = first_match(TOKEN_RE, new_html, "__RequestVerificationToken")
     thread_id = first_match(THREAD_RE, new_html, "SelectedThreadIds")
+    if thread_id != expected_thread_id:
+        raise AssertionError(f"Unexpected thread id {thread_id} for {artifact_prefix}.")
 
     final_url = post_form(
         url=f"{base_url}/jobs/new?handler=Execute&lang=en",
         cookie_jar=cookie_jar,
-        response_body_path=temp_root / "jobs-execute.html",
-        fields={
-            "__RequestVerificationToken": token,
-            "PrimaryCodexHomePath": to_windows_path(FIXTURE_CODEX_HOME),
-            "BackupCodexHomePathsText": "",
-            "IncludeArchivedSources": "true",
-            "IncludeToolOutputs": "true",
-            "RedactionProfile": "strict",
-            "DateFrom": "",
-            "DateTo": "",
-            "SelectedThreadIds": thread_id,
-        },
+        response_body_path=temp_root / f"{artifact_prefix}-jobs-execute.html",
+        fields=execute_fields(
+            token=token,
+            primary_root=primary_root,
+            thread_id=thread_id,
+        ),
     )
     match = JOB_ID_RE.search(final_url)
     if not match:
@@ -197,9 +250,9 @@ def run_smoke_flow(*, base_url: str, temp_root: Path, outputs_root: Path) -> Non
     details_html, _ = fetch_text(
         url=f"{base_url}/jobs/{job_id}?lang=en",
         cookie_jar=cookie_jar,
-        response_body_path=temp_root / "jobs-details.html",
+        response_body_path=temp_root / f"{artifact_prefix}-jobs-details.html",
     )
-    if THREAD_TITLE not in details_html:
+    if expected_title not in details_html:
         raise AssertionError("Job details did not render the thread timeline preview.")
     if "Completed" not in details_html:
         raise AssertionError("Job details did not render the completed state.")
@@ -207,12 +260,12 @@ def run_smoke_flow(*, base_url: str, temp_root: Path, outputs_root: Path) -> Non
     jobs_html, _ = fetch_text(
         url=f"{base_url}/jobs?lang=en",
         cookie_jar=cookie_jar,
-        response_body_path=temp_root / "jobs-index.html",
+        response_body_path=temp_root / f"{artifact_prefix}-jobs-index.html",
     )
     if job_id not in jobs_html:
         raise AssertionError("Jobs list did not render the completed run.")
 
-    download_path = temp_root / "download.zip"
+    download_path = temp_root / f"{artifact_prefix}-download.zip"
     download_response = subprocess.run(
         [
             str(WINDOWS_CURL),
@@ -238,12 +291,81 @@ def run_smoke_flow(*, base_url: str, temp_root: Path, outputs_root: Path) -> Non
     if download_response.stdout.strip() != "200" or payload != b"PK\x03\x04":
         raise AssertionError("ZIP download did not return a valid archive.")
 
-    timeline_path = job_dir / "threads" / "11111111-2222-3333-4444-555555555555" / "timeline.md"
+    timeline_path = job_dir / "threads" / expected_thread_id / "timeline.md"
     if not timeline_path.exists():
         raise AssertionError("Worker did not create the thread timeline.")
 
     if new_url == final_url:
         raise AssertionError("Execute flow did not redirect to a job details page.")
+
+
+def refresh_fields(*, token: str, primary_root: Path) -> dict[str, str]:
+    return {
+        "__RequestVerificationToken": token,
+        "PrimaryCodexHomePath": to_windows_path(primary_root),
+        "BackupCodexHomePathsText": "",
+        "IncludeArchivedSources": "true",
+        "IncludeToolOutputs": "true",
+        "RedactionProfile": "strict",
+        "DateFrom": "",
+        "DateTo": "",
+    }
+
+
+def execute_fields(*, token: str, primary_root: Path, thread_id: str) -> dict[str, str]:
+    fields = refresh_fields(token=token, primary_root=primary_root)
+    fields["SelectedThreadIds"] = thread_id
+    return fields
+
+
+def create_state_catalog_root(temp_root: Path) -> Path:
+    root = temp_root / "state-catalog-root"
+    thread_reads_root = root / "_codex_tools" / "thread_reads"
+    thread_reads_root.mkdir(parents=True, exist_ok=True)
+
+    source_thread_read = ARCHIVED_FIXTURE_ROOT / "_codex_tools" / "thread_reads" / f"{ARCHIVED_THREAD_ID}.json"
+    shutil.copy2(source_thread_read, thread_reads_root / source_thread_read.name)
+
+    db_path = root / "state_5.sqlite"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                first_user_message TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO threads (
+                id,
+                rollout_path,
+                updated_at,
+                cwd,
+                title,
+                first_user_message
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ARCHIVED_THREAD_ID,
+                "C:\\Users\\amano\\.codex\\sessions\\2026\\04\\01\\missing.jsonl",
+                1775102460,
+                "c:\\apps\\windowscodex2timeline",
+                "State catalog request for archived@example.com token=legacy-secret",
+                "Summarize archived@example.com follow-up with token=legacy-secret",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    return root
 
 
 def process_job(job_dir: Path) -> None:
