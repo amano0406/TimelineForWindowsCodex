@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using WindowsCodex2Timeline.Web.Services;
+using TimelineForWindowsCodex.Web.Services;
 
-namespace WindowsCodex2Timeline.Web.Pages;
+namespace TimelineForWindowsCodex.Web.Pages;
 
 public sealed class SettingsModel(
     SettingsStore settingsStore,

@@ -1,7 +1,7 @@
 using System.Text.Json;
-using WindowsCodex2Timeline.Web.Models;
+using TimelineForWindowsCodex.Web.Models;
 
-namespace WindowsCodex2Timeline.Web.Services;
+namespace TimelineForWindowsCodex.Web.Services;
 
 public sealed class SettingsStore(AppPaths paths)
 {

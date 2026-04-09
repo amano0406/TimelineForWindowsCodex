@@ -19,9 +19,9 @@ WINDOWS_CMD = Path("/mnt/c/Windows/System32/cmd.exe")
 WINDOWS_TASKKILL = Path("/mnt/c/Windows/System32/taskkill.exe")
 WINDOWS_CURL = Path("/mnt/c/Windows/System32/curl.exe")
 WINDOWS_DOTNET_CMD = r"C:\Progra~1\dotnet\dotnet.exe"
-WEB_PROJECT = REPO_ROOT / "web" / "WindowsCodex2Timeline.Web.csproj"
+WEB_PROJECT = REPO_ROOT / "web" / "TimelineForWindowsCodex.Web.csproj"
 WEB_ROOT = REPO_ROOT / "web"
-WEB_DLL = REPO_ROOT / "web" / "bin" / "Debug" / "net10.0" / "WindowsCodex2Timeline.Web.dll"
+WEB_DLL = REPO_ROOT / "web" / "bin" / "Debug" / "net10.0" / "TimelineForWindowsCodex.Web.dll"
 WORKER_SRC = REPO_ROOT / "worker" / "src"
 FIXTURE_CODEX_HOME = REPO_ROOT / "tests" / "fixtures" / "codex-home-min"
 THREAD_TITLE = "Codex timeline sample thread"
@@ -115,9 +115,9 @@ def start_web_server(
             f"cd /d {to_windows_path(WEB_ROOT)}",
             "set ASPNETCORE_ENVIRONMENT=Development",
             f"set ASPNETCORE_URLS={base_url}",
-            f"set WINDOWSCODEX2TIMELINE_RUNTIME_DEFAULTS={to_windows_path(runtime_defaults_path)}",
-            f"set WINDOWSCODEX2TIMELINE_APPDATA_ROOT={to_windows_path(app_data_root)}",
-            f"set WINDOWSCODEX2TIMELINE_OUTPUTS_ROOT={to_windows_path(outputs_root)}",
+            f"set TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS={to_windows_path(runtime_defaults_path)}",
+            f"set TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT={to_windows_path(app_data_root)}",
+            f"set TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT={to_windows_path(outputs_root)}",
             f"{WINDOWS_DOTNET_CMD} {to_windows_path(WEB_DLL)}",
         ]
     )
@@ -356,7 +356,7 @@ def create_state_catalog_root(temp_root: Path) -> Path:
                 ARCHIVED_THREAD_ID,
                 "C:\\Users\\amano\\.codex\\sessions\\2026\\04\\01\\missing.jsonl",
                 1775102460,
-                "c:\\apps\\windowscodex2timeline",
+                "c:\\apps\\TimelineForWindowsCodex",
                 "State catalog request for archived@example.com token=legacy-secret",
                 "Summarize archived@example.com follow-up with token=legacy-secret",
             ),
@@ -373,7 +373,7 @@ def process_job(job_dir: Path) -> None:
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(WORKER_SRC) if not existing_pythonpath else f"{WORKER_SRC}:{existing_pythonpath}"
     subprocess.run(
-        [sys.executable, "-m", "windowscodex2timeline_worker", "process-job", str(job_dir)],
+        [sys.executable, "-m", "timeline_for_windows_codex_worker", "process-job", str(job_dir)],
         check=True,
         env=env,
     )

@@ -1,7 +1,7 @@
 @page "/jobs/new"
-@model WindowsCodex2Timeline.Web.Pages.Jobs.NewModel
-@inject WindowsCodex2Timeline.Web.Services.LanguageService LanguageService
-@inject WindowsCodex2Timeline.Web.Services.JsonLocalizationService Localizer
+@model TimelineForWindowsCodex.Web.Pages.Jobs.NewModel
+@inject TimelineForWindowsCodex.Web.Services.LanguageService LanguageService
+@inject TimelineForWindowsCodex.Web.Services.JsonLocalizationService Localizer
 @{
     var lang = LanguageService.Resolve(ViewContext.HttpContext.Request);
     string L(string key) => Localizer.Get(lang, key);

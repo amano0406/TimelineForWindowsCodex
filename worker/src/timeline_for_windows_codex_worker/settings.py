@@ -19,15 +19,15 @@ def _normalize_path(value: str | None, fallback: str) -> Path:
 
 def load_runtime_paths() -> RuntimePaths:
     appdata_root = _normalize_path(
-        os.environ.get("WINDOWSCODEX2TIMELINE_APPDATA_ROOT"),
+        os.environ.get("TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT"),
         "/shared/app-data",
     )
     outputs_root = _normalize_path(
-        os.environ.get("WINDOWSCODEX2TIMELINE_OUTPUTS_ROOT"),
+        os.environ.get("TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT"),
         str(appdata_root / "outputs"),
     )
     runtime_defaults_path = _normalize_path(
-        os.environ.get("WINDOWSCODEX2TIMELINE_RUNTIME_DEFAULTS"),
+        os.environ.get("TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS"),
         "/app/config/runtime.defaults.json",
     )
     return RuntimePaths(

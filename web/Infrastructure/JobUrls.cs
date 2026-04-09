@@ -1,4 +1,4 @@
-namespace WindowsCodex2Timeline.Web.Infrastructure;
+namespace TimelineForWindowsCodex.Web.Infrastructure;
 
 public static class JobUrls
 {

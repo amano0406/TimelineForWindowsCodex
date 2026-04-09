@@ -213,7 +213,7 @@ def process_job(job_dir: Path) -> None:
 
 def build_run_archive(job_dir: Path, thread_rows: list[dict[str, object]]) -> Path:
     export_root = ensure_dir(job_dir / "export")
-    archive_path = export_root / "windowscodex2timeline-export.zip"
+    archive_path = export_root / "TimelineForWindowsCodex-export.zip"
 
     with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as archive:
         _write_if_exists(archive, job_dir / "README.md", "README.md")

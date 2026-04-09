@@ -10,7 +10,7 @@ from .settings import load_runtime_paths
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="windowscodex2timeline-worker")
+    parser = argparse.ArgumentParser(prog="timeline-for-windows-codex-worker")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     daemon_parser = subparsers.add_parser("daemon")

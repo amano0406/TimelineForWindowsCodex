@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using WindowsCodex2Timeline.Web.Models;
-using WindowsCodex2Timeline.Web.Services;
+using TimelineForWindowsCodex.Web.Models;
+using TimelineForWindowsCodex.Web.Services;
 
-namespace WindowsCodex2Timeline.Web.Pages.Jobs;
+namespace TimelineForWindowsCodex.Web.Pages.Jobs;
 
 public sealed class DetailsModel(RunStore runStore) : PageModel
 {

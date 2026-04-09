@@ -1,9 +1,9 @@
 @page "/jobs"
-@model WindowsCodex2Timeline.Web.Pages.Jobs.IndexModel
-@using WindowsCodex2Timeline.Web.Infrastructure
+@model TimelineForWindowsCodex.Web.Pages.Jobs.IndexModel
+@using TimelineForWindowsCodex.Web.Infrastructure
 @using Microsoft.AspNetCore.WebUtilities
-@inject WindowsCodex2Timeline.Web.Services.LanguageService LanguageService
-@inject WindowsCodex2Timeline.Web.Services.JsonLocalizationService Localizer
+@inject TimelineForWindowsCodex.Web.Services.LanguageService LanguageService
+@inject TimelineForWindowsCodex.Web.Services.JsonLocalizationService Localizer
 @{
     var lang = LanguageService.Resolve(ViewContext.HttpContext.Request);
     string L(string key) => Localizer.Get(lang, key);

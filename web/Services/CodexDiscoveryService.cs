@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using WindowsCodex2Timeline.Web.Models;
+using TimelineForWindowsCodex.Web.Models;
 
-namespace WindowsCodex2Timeline.Web.Services;
+namespace TimelineForWindowsCodex.Web.Services;
 
 public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService> logger)
 {

@@ -1,17 +1,17 @@
-namespace WindowsCodex2Timeline.Web.Services;
+namespace TimelineForWindowsCodex.Web.Services;
 
 public sealed class AppPaths
 {
     public AppPaths(IConfiguration configuration)
     {
         RuntimeDefaultsPath = NormalizePath(
-            configuration["WINDOWSCODEX2TIMELINE_RUNTIME_DEFAULTS"],
+            configuration["TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS"],
             "/app/config/runtime.defaults.json");
         AppDataRoot = NormalizePath(
-            configuration["WINDOWSCODEX2TIMELINE_APPDATA_ROOT"],
+            configuration["TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT"],
             "/shared/app-data");
         OutputsRoot = NormalizePath(
-            configuration["WINDOWSCODEX2TIMELINE_OUTPUTS_ROOT"],
+            configuration["TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT"],
             Path.Combine(AppDataRoot, "outputs"));
         InstanceId = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}"[..24];
     }

@@ -1,6 +1,6 @@
-# windowscodex2timeline
+# TimelineForWindowsCodex
 
-`windowscodex2timeline` turns local Codex Desktop history on Windows into timeline-oriented markdown, JSON, and ZIP handoff packages.
+`TimelineForWindowsCodex` turns local Codex Desktop history on Windows into timeline-oriented markdown, JSON, and ZIP handoff packages.
 
 As of 2026-04-06 Asia/Tokyo, the repository is at an MVP scaffold stage with a working end-to-end vertical slice.
 
@@ -130,14 +130,14 @@ Deferred:
 Worker integration:
 
 ```bash
-PYTHONPATH=/mnt/c/apps/windowscodex2timeline/worker/src \
-python3 -m unittest discover -s /mnt/c/apps/windowscodex2timeline/worker/tests -v
+PYTHONPATH=/mnt/c/apps/TimelineForWindowsCodex/worker/src \
+python3 -m unittest discover -s /mnt/c/apps/TimelineForWindowsCodex/worker/tests -v
 ```
 
 Web smoke:
 
 ```bash
-python3 /mnt/c/apps/windowscodex2timeline/tests/smoke/run_web_smoke.py
+python3 /mnt/c/apps/TimelineForWindowsCodex/tests/smoke/run_web_smoke.py
 ```
 
 Notes:

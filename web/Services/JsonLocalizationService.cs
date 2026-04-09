@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace WindowsCodex2Timeline.Web.Services;
+namespace TimelineForWindowsCodex.Web.Services;
 
 public sealed class JsonLocalizationService(
     IWebHostEnvironment environment,

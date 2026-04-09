@@ -1,4 +1,4 @@
-name: windowscodex2timeline
+name: timeline-for-windows-codex
 
 services:
   web:
@@ -7,9 +7,9 @@ services:
       dockerfile: docker/web.Dockerfile
     environment:
       ASPNETCORE_URLS: http://+:8080
-      WINDOWSCODEX2TIMELINE_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json
-      WINDOWSCODEX2TIMELINE_APPDATA_ROOT: /shared/app-data
-      WINDOWSCODEX2TIMELINE_OUTPUTS_ROOT: /shared/outputs
+      TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json
+      TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT: /shared/app-data
+      TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT: /shared/outputs
     ports:
       - "${HOST_WEB_PORT:-5845}:8080"
     volumes:
@@ -26,9 +26,9 @@ services:
       context: .
       dockerfile: docker/worker.Dockerfile
     environment:
-      WINDOWSCODEX2TIMELINE_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json
-      WINDOWSCODEX2TIMELINE_APPDATA_ROOT: /shared/app-data
-      WINDOWSCODEX2TIMELINE_OUTPUTS_ROOT: /shared/outputs
+      TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json
+      TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT: /shared/app-data
+      TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT: /shared/outputs
     volumes:
       - app-data:/shared/app-data
       - outputs:/shared/outputs

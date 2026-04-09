@@ -82,7 +82,7 @@ def render_timeline_index(job_id: str, thread_rows: list[dict[str, Any]]) -> str
 
 def render_handoff_md(job_id: str, thread_rows: list[dict[str, Any]], total_events: int, total_segments: int) -> str:
     lines = [
-        f"# windowscodex2timeline handoff {job_id}",
+        f"# TimelineForWindowsCodex handoff {job_id}",
         "",
         f"- Thread count: `{len(thread_rows)}`",
         f"- Event count: `{total_events}`",

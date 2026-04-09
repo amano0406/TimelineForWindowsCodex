@@ -1,9 +1,9 @@
 using System.IO.Compression;
 using System.Text.Json;
-using WindowsCodex2Timeline.Web.Infrastructure;
-using WindowsCodex2Timeline.Web.Models;
+using TimelineForWindowsCodex.Web.Infrastructure;
+using TimelineForWindowsCodex.Web.Models;
 
-namespace WindowsCodex2Timeline.Web.Services;
+namespace TimelineForWindowsCodex.Web.Services;
 
 public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryService)
 {
@@ -102,7 +102,7 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
         await WriteJsonAsync(Path.Combine(runDirectory, "manifest.json"), manifest, cancellationToken);
         await File.WriteAllTextAsync(
             Path.Combine(runDirectory, "README.md"),
-            "# windowscodex2timeline run\n\nThis directory is the source of truth for one timeline run.\n",
+            "# TimelineForWindowsCodex run\n\nThis directory is the source of truth for one timeline run.\n",
             cancellationToken);
         await File.WriteAllTextAsync(
             Path.Combine(runDirectory, "NOTICE.md"),
@@ -144,7 +144,7 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
                 CreatedAt = request.CreatedAt,
                 UpdatedAt = status.UpdatedAt,
                 ElapsedWallSec = DisplayFormatters.CalculateElapsedSeconds(status.StartedAt, status.CompletedAt, status.UpdatedAt),
-                HasDownloadableArchive = File.Exists(Path.Combine(runDirectory, "export", "windowscodex2timeline-export.zip")),
+                HasDownloadableArchive = File.Exists(Path.Combine(runDirectory, "export", "TimelineForWindowsCodex-export.zip")),
             });
         }
 
@@ -205,7 +205,7 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
             Result = result,
             ManifestItems = manifest?.Items ?? [],
             TimelineItems = timelineItems.OrderBy(static item => item.PreferredTitle, StringComparer.CurrentCultureIgnoreCase).ToList(),
-            ArchivePath = Path.Combine(runDirectory, "export", "windowscodex2timeline-export.zip"),
+            ArchivePath = Path.Combine(runDirectory, "export", "TimelineForWindowsCodex-export.zip"),
             ElapsedWallSec = DisplayFormatters.CalculateElapsedSeconds(status.StartedAt, status.CompletedAt, status.UpdatedAt),
         };
     }

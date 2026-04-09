@@ -1,9 +1,9 @@
 @page "/jobs/{id}"
-@model WindowsCodex2Timeline.Web.Pages.Jobs.DetailsModel
-@using WindowsCodex2Timeline.Web.Infrastructure
+@model TimelineForWindowsCodex.Web.Pages.Jobs.DetailsModel
+@using TimelineForWindowsCodex.Web.Infrastructure
 @using Microsoft.AspNetCore.WebUtilities
-@inject WindowsCodex2Timeline.Web.Services.LanguageService LanguageService
-@inject WindowsCodex2Timeline.Web.Services.JsonLocalizationService Localizer
+@inject TimelineForWindowsCodex.Web.Services.LanguageService LanguageService
+@inject TimelineForWindowsCodex.Web.Services.JsonLocalizationService Localizer
 @{
     var lang = LanguageService.Resolve(ViewContext.HttpContext.Request);
     string L(string key) => Localizer.Get(lang, key);
@@ -35,7 +35,7 @@
     <section class="app-page space-y-6">
         <header class="panel page-header">
             <div>
-                <p class="eyebrow">windowscodex2timeline</p>
+                <p class="eyebrow">TimelineForWindowsCodex</p>
                 <h1 class="page-title">@L("details.not_found_title")</h1>
                 <p class="page-description">@L("details.not_found_description")</p>
             </div>

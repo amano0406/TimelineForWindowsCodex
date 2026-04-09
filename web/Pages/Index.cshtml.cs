@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
-namespace WindowsCodex2Timeline.Web.Pages;
+namespace TimelineForWindowsCodex.Web.Pages;
 
 public sealed class IndexModel : PageModel
 {

@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.WebUtilities;
-using WindowsCodex2Timeline.Web.Infrastructure;
-using WindowsCodex2Timeline.Web.Models;
-using WindowsCodex2Timeline.Web.Services;
+using TimelineForWindowsCodex.Web.Infrastructure;
+using TimelineForWindowsCodex.Web.Models;
+using TimelineForWindowsCodex.Web.Services;
 
-namespace WindowsCodex2Timeline.Web.Pages.Jobs;
+namespace TimelineForWindowsCodex.Web.Pages.Jobs;
 
 public sealed class NewModel(
     RunStore runStore,

@@ -1,5 +1,5 @@
 using System.Globalization;
-using WindowsCodex2Timeline.Web.Services;
+using TimelineForWindowsCodex.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 

@@ -12,9 +12,9 @@ WORKER_SRC = REPO_ROOT / "worker" / "src"
 if str(WORKER_SRC) not in sys.path:
     sys.path.insert(0, str(WORKER_SRC))
 
-from windowscodex2timeline_worker.contracts import JobRequest, ThreadSelection  # noqa: E402
-from windowscodex2timeline_worker.fs_utils import ensure_dir, read_json, write_json_atomic  # noqa: E402
-from windowscodex2timeline_worker.processor import process_job  # noqa: E402
+from timeline_for_windows_codex_worker.contracts import JobRequest, ThreadSelection  # noqa: E402
+from timeline_for_windows_codex_worker.fs_utils import ensure_dir, read_json, write_json_atomic  # noqa: E402
+from timeline_for_windows_codex_worker.processor import process_job  # noqa: E402
 
 
 FIXTURE_CODEX_HOME = REPO_ROOT / "tests" / "fixtures" / "codex-home-min"
@@ -63,7 +63,7 @@ class ProcessJobIntegrationTests(unittest.TestCase):
             self.assertNotIn("hello@example.com", rendered_payload)
             self.assertNotIn("secret123", rendered_payload)
             self.assertIn("Terminal block", timeline_text)
-            self.assertIn("windowscodex2timeline handoff", handoff_text)
+            self.assertIn("TimelineForWindowsCodex handoff", handoff_text)
 
             archive_path = Path(result["archive_path"])
             self.assertTrue(archive_path.exists())

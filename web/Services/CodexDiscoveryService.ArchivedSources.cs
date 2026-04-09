@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
-namespace WindowsCodex2Timeline.Web.Services;
+namespace TimelineForWindowsCodex.Web.Services;
 
 public sealed partial class CodexDiscoveryService
 {

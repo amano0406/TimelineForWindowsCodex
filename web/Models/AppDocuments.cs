@@ -1,4 +1,4 @@
-namespace WindowsCodex2Timeline.Web.Models;
+namespace TimelineForWindowsCodex.Web.Models;
 
 public sealed class AppSettingsDocument
 {

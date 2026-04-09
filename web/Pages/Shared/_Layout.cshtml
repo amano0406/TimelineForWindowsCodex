@@ -1,7 +1,7 @@
 @using Microsoft.AspNetCore.WebUtilities
-@inject WindowsCodex2Timeline.Web.Services.LanguageService LanguageService
-@inject WindowsCodex2Timeline.Web.Services.JsonLocalizationService Localizer
-@inject WindowsCodex2Timeline.Web.Services.AppPaths AppPaths
+@inject TimelineForWindowsCodex.Web.Services.LanguageService LanguageService
+@inject TimelineForWindowsCodex.Web.Services.JsonLocalizationService Localizer
+@inject TimelineForWindowsCodex.Web.Services.AppPaths AppPaths
 @{
     var lang = LanguageService.Resolve(Context.Request);
     var currentPath = Context.Request.Path.Value ?? "/";
@@ -31,7 +31,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>@ViewData["Title"] - windowscodex2timeline</title>
+    <title>@ViewData["Title"] - TimelineForWindowsCodex</title>
     <meta name="theme-color" content="#ffffff" />
     <link rel="icon" type="image/x-icon" href="~/favicon.ico" asp-append-version="true" />
     <script src="https://cdn.tailwindcss.com"></script>
@@ -46,7 +46,7 @@
                     <a href="@LinkWithLang("/jobs/new")" class="brand-link">
                         <div class="space-y-1">
                             <div class="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">@L("layout.brand_eyebrow")</div>
-                            <div class="text-xl font-semibold text-slate-950">windowscodex2timeline</div>
+                            <div class="text-xl font-semibold text-slate-950">TimelineForWindowsCodex</div>
                             <div class="text-sm text-slate-500">@L("layout.brand_description")</div>
                         </div>
                     </a>
