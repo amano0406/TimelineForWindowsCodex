@@ -3,7 +3,13 @@ using TimelineForWindowsCodex.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddRazorPages();
+builder.Services
+    .AddRazorPages(options =>
+    {
+        options.Conventions.AddPageRoute("/Jobs/New", "/threads");
+        options.Conventions.AddPageRoute("/Jobs/Index", "/exports");
+        options.Conventions.AddPageRoute("/Jobs/Details", "/exports/{id}");
+    });
 builder.Services.AddSingleton<AppPaths>();
 builder.Services.AddSingleton<LanguageService>();
 builder.Services.AddSingleton<JsonLocalizationService>();
@@ -47,6 +53,20 @@ app.MapGet("/api/app/version", () => Results.Ok(new
 }));
 
 app.MapGet("/jobs/{id}/download", async (string id, RunStore runStore, CancellationToken cancellationToken) =>
+{
+    var archivePath = await runStore.GetArchivePathAsync(id, cancellationToken);
+    if (archivePath is null || !File.Exists(archivePath))
+    {
+        return Results.NotFound();
+    }
+
+    return Results.File(
+        archivePath,
+        contentType: "application/zip",
+        fileDownloadName: Path.GetFileName(archivePath));
+});
+
+app.MapGet("/exports/{id}/download", async (string id, RunStore runStore, CancellationToken cancellationToken) =>
 {
     var archivePath = await runStore.GetArchivePathAsync(id, cancellationToken);
     if (archivePath is null || !File.Exists(archivePath))

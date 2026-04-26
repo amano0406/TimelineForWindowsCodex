@@ -36,7 +36,6 @@ public sealed partial class CodexDiscoveryService
                     rollout_path,
                     updated_at,
                     cwd,
-                    title,
                     first_user_message
                 FROM threads
                 """;
@@ -53,15 +52,9 @@ public sealed partial class CodexDiscoveryService
                 var rolloutPath = reader.IsDBNull(1) ? null : reader.GetString(1);
                 var updatedAt = reader.IsDBNull(2) ? null : ToIsoFromUnix(reader.GetInt64(2));
                 var cwd = reader.IsDBNull(3) ? null : reader.GetString(3);
-                var title = reader.IsDBNull(4) ? null : reader.GetString(4);
-                var firstUserMessage = reader.IsDBNull(5) ? null : reader.GetString(5);
+                var firstUserMessage = reader.IsDBNull(4) ? null : reader.GetString(4);
 
                 var thread = GetOrCreate(threadId!, rootPath, rootKind, priority, threads);
-                if ((string.IsNullOrWhiteSpace(thread.PreferredTitle) || IsDefaultTitle(thread)) &&
-                    !string.IsNullOrWhiteSpace(title))
-                {
-                    thread.PreferredTitle = SanitizeText(title, 120);
-                }
 
                 if ((string.IsNullOrWhiteSpace(thread.SessionPath) || !File.Exists(thread.SessionPath)) &&
                     !string.IsNullOrWhiteSpace(rolloutPath))
@@ -130,17 +123,7 @@ public sealed partial class CodexDiscoveryService
                     if (!string.IsNullOrWhiteSpace(preview.Title))
                     {
                         var sanitizedTitle = SanitizeText(preview.Title, 120);
-                        var shouldPreferThreadReadTitle = IsDefaultTitle(thread) || thread.TitleHistory.Count == 0;
-                        if (!string.IsNullOrWhiteSpace(sanitizedTitle) &&
-                            !thread.TitleHistory.Contains(sanitizedTitle, StringComparer.Ordinal))
-                        {
-                            thread.TitleHistory.Add(sanitizedTitle);
-                        }
-
-                        if (shouldPreferThreadReadTitle)
-                        {
-                            thread.PreferredTitle = sanitizedTitle;
-                        }
+                        AddObservedThreadName(thread, sanitizedTitle, preview.UpdatedAt, "thread_reads");
                     }
 
                     if (string.IsNullOrWhiteSpace(thread.Cwd) && !string.IsNullOrWhiteSpace(preview.Cwd))
@@ -294,5 +277,5 @@ public sealed partial class CodexDiscoveryService
 
     private static bool IsDefaultTitle(MutableThread thread) =>
         string.IsNullOrWhiteSpace(thread.PreferredTitle) ||
-        string.Equals(thread.PreferredTitle, $"Thread {thread.ThreadId}", StringComparison.Ordinal);
+        string.Equals(thread.PreferredTitle, thread.ThreadId, StringComparison.Ordinal);
 }

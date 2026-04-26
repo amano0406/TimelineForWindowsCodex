@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .contracts import ThreadSelection
 
@@ -15,6 +16,7 @@ _TOKEN_RE = re.compile(r"(?i)(token\s*[:=]\s*)\S+")
 _KEY_RE = re.compile(r"(?i)(api[_ -]?key\s*[:=]\s*)\S+")
 _WHITESPACE_RE = re.compile(r"\s+")
 _WINDOWS_PATH_RE = re.compile(r"^(?P<drive>[A-Za-z]):[\\/](?P<rest>.*)$")
+_SESSION_RECORD_START_RE = re.compile(r'^\{"timestamp":')
 
 
 def sanitize_text(raw_text: str | None, *, profile: str = "strict", max_length: int = 2000) -> str:
@@ -22,6 +24,21 @@ def sanitize_text(raw_text: str | None, *, profile: str = "strict", max_length: 
         return ""
 
     text = raw_text.replace("\r", " ").replace("\n", " ").strip()
+    text = _apply_redaction(text, profile=profile)
+    text = _WHITESPACE_RE.sub(" ", text).strip()
+    return text[: max_length - 3] + "..." if len(text) > max_length else text
+
+
+def sanitize_multiline_text(raw_text: str | None, *, profile: str = "strict", max_length: int = 8000) -> str:
+    if not raw_text:
+        return ""
+
+    text = _normalize_raw_text(raw_text).strip()
+    text = _apply_redaction(text, profile=profile)
+    return text[: max_length - 3] + "..." if len(text) > max_length else text
+
+
+def _apply_redaction(text: str, *, profile: str) -> str:
     text = _EMAIL_RE.sub("[email]", text)
     text = _URL_RE.sub("[url]", text)
 
@@ -30,8 +47,7 @@ def sanitize_text(raw_text: str | None, *, profile: str = "strict", max_length: 
         text = _TOKEN_RE.sub(r"\1[redacted]", text)
         text = _KEY_RE.sub(r"\1[redacted]", text)
 
-    text = _WHITESPACE_RE.sub(" ", text).strip()
-    return text[: max_length - 3] + "..." if len(text) > max_length else text
+    return text
 
 
 def _date_key(iso_timestamp: str | None) -> str | None:
@@ -165,6 +181,61 @@ def parse_thread_events(
     )
 
 
+def parse_thread_transcript_entries(
+    thread: ThreadSelection,
+    *,
+    redaction_profile: str,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict[str, Any]]:
+    source_path = resolve_thread_session_path(thread)
+    if source_path is None:
+        return []
+
+    if source_path.suffix.lower() == ".json":
+        return _parse_thread_read_transcript_entries(
+            source_path,
+            thread,
+            redaction_profile=redaction_profile,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    return _parse_session_jsonl_transcript_entries(
+        source_path,
+        thread,
+        redaction_profile=redaction_profile,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+def parse_thread_environment_observations(
+    thread: ThreadSelection,
+    *,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict[str, Any]]:
+    source_path = resolve_thread_session_path(thread)
+    if source_path is None:
+        return []
+
+    if source_path.suffix.lower() == ".json":
+        return _parse_thread_read_environment_observations(
+            source_path,
+            thread,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    return _parse_session_jsonl_environment_observations(
+        source_path,
+        thread,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
 def _candidate_source_roots(source_root: Path, thread_id: str) -> list[tuple[Path, str]]:
     roots: list[tuple[Path, str]] = [
         (source_root / "sessions", f"*{thread_id}*.jsonl"),
@@ -196,6 +267,47 @@ def _candidate_source_roots(source_root: Path, thread_id: str) -> list[tuple[Pat
     return deduped
 
 
+def _iter_session_jsonl_payload_roots(session_path: Path) -> Iterator[dict[str, Any]]:
+    buffer: list[str] = []
+
+    for raw_line in session_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not raw_line.strip():
+            continue
+
+        # Some Codex logs include raw multi-line tool output inside a JSON string.
+        # When that happens, keep appending until the record becomes valid, or drop the
+        # malformed buffered record once the next clear record start is encountered.
+        if buffer and _SESSION_RECORD_START_RE.match(raw_line):
+            payload_root = _try_load_session_payload_root("\n".join(buffer))
+            if payload_root is not None:
+                yield payload_root
+            buffer = [raw_line]
+            payload_root = _try_load_session_payload_root(raw_line)
+            if payload_root is not None:
+                yield payload_root
+                buffer = []
+            continue
+
+        buffer.append(raw_line)
+        payload_root = _try_load_session_payload_root("\n".join(buffer))
+        if payload_root is not None:
+            yield payload_root
+            buffer = []
+
+    if buffer:
+        payload_root = _try_load_session_payload_root("\n".join(buffer))
+        if payload_root is not None:
+            yield payload_root
+
+
+def _try_load_session_payload_root(raw_text: str) -> dict[str, Any] | None:
+    try:
+        payload_root = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return None
+    return payload_root if isinstance(payload_root, dict) else None
+
+
 def _parse_session_jsonl_events(
     session_path: Path,
     thread: ThreadSelection,
@@ -208,11 +320,7 @@ def _parse_session_jsonl_events(
     rows: list[dict[str, Any]] = []
     sequence = 0
 
-    for raw_line in session_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not raw_line.strip():
-            continue
-
-        payload_root = json.loads(raw_line)
+    for payload_root in _iter_session_jsonl_payload_roots(session_path):
         timestamp = payload_root.get("timestamp")
         if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
             continue
@@ -367,6 +475,175 @@ def _parse_session_jsonl_events(
     return rows
 
 
+def _parse_session_jsonl_transcript_entries(
+    session_path: Path,
+    thread: ThreadSelection,
+    *,
+    redaction_profile: str,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    fallback_rows: list[dict[str, Any]] = []
+    sequence = 0
+    fallback_sequence = 0
+    current_mode: str | None = None
+
+    for payload_root in _iter_session_jsonl_payload_roots(session_path):
+        timestamp = payload_root.get("timestamp")
+        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
+            continue
+
+        item_type = str(payload_root.get("type") or "")
+        payload = payload_root.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+
+        if item_type == "turn_context":
+            collaboration_mode = payload.get("collaboration_mode")
+            if isinstance(collaboration_mode, dict):
+                current_mode = str(collaboration_mode.get("mode") or "").strip().lower() or None
+            continue
+
+        if item_type == "response_item":
+            response_type = str(payload.get("type") or "")
+            role = str(payload.get("role") or "").strip().lower()
+            if response_type == "message" and role in {"user", "assistant"}:
+                raw_text, attachments = _extract_response_message_transcript_parts(payload)
+                if _should_skip_transcript_message(role, raw_text):
+                    continue
+                if raw_text or attachments:
+                    sequence += 1
+                    rows.append(
+                        {
+                            "timestamp": timestamp,
+                            "sequence": sequence,
+                            "thread_id": thread.thread_id,
+                            "actor": role,
+                            "phase": str(payload.get("phase") or "conversation"),
+                            "mode": current_mode if role == "user" else None,
+                            "text": sanitize_multiline_text(raw_text, profile=redaction_profile),
+                            "attachments": attachments,
+                        }
+                    )
+                continue
+
+        if item_type == "event_msg":
+            event_type = str(payload.get("type") or "")
+            if event_type in {"user_message", "agent_message"}:
+                fallback_sequence += 1
+                fallback_rows.append(
+                    {
+                        "timestamp": timestamp,
+                        "sequence": fallback_sequence,
+                        "thread_id": thread.thread_id,
+                        "actor": "user" if event_type == "user_message" else "assistant",
+                        "phase": str(payload.get("phase") or "conversation"),
+                        "mode": current_mode if event_type == "user_message" else None,
+                        "text": sanitize_multiline_text(
+                            str(payload.get("message") or ""),
+                            profile=redaction_profile,
+                        ),
+                        "attachments": _extract_event_message_attachments(payload),
+                    }
+                )
+
+    return rows or fallback_rows
+
+
+def _parse_session_jsonl_environment_observations(
+    session_path: Path,
+    thread: ThreadSelection,
+    *,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    for payload_root in _iter_session_jsonl_payload_roots(session_path):
+        timestamp = payload_root.get("timestamp")
+        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
+            continue
+
+        item_type = str(payload_root.get("type") or "")
+        payload = payload_root.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+
+        if item_type == "session_meta":
+            runtime_payload = {
+                "cli_version": str(payload.get("cli_version") or payload.get("cliVersion") or "").strip(),
+                "originator": str(payload.get("originator") or "").strip(),
+                "source": str(payload.get("source") or "").strip(),
+                "model_provider": str(payload.get("model_provider") or payload.get("modelProvider") or "").strip(),
+            }
+            if any(runtime_payload.values()):
+                rows.append(
+                    {
+                        "timestamp": timestamp,
+                        "thread_id": thread.thread_id,
+                        "thread_name": thread.preferred_title,
+                        "session_path": str(session_path),
+                        "kind": "client_runtime",
+                        "fingerprint": _fingerprint_payload(runtime_payload),
+                        **runtime_payload,
+                    }
+                )
+            continue
+
+        if item_type != "turn_context":
+            continue
+
+        turn_id = str(payload.get("turn_id") or "").strip() or None
+        user_instructions = _normalize_raw_text(str(payload.get("user_instructions") or ""))
+        if user_instructions.strip():
+            rows.append(
+                {
+                    "timestamp": timestamp,
+                    "thread_id": thread.thread_id,
+                    "thread_name": thread.preferred_title,
+                    "session_path": str(session_path),
+                    "turn_id": turn_id,
+                    "kind": "custom_instruction",
+                    "fingerprint": _fingerprint_text(user_instructions),
+                    "text": user_instructions,
+                }
+            )
+
+        collaboration_mode = payload.get("collaboration_mode")
+        collaboration_settings = collaboration_mode.get("settings") if isinstance(collaboration_mode, dict) else {}
+        if not isinstance(collaboration_settings, dict):
+            collaboration_settings = {}
+
+        model_profile = {
+            "model": str(payload.get("model") or collaboration_settings.get("model") or "").strip(),
+            "reasoning_effort": str(
+                collaboration_settings.get("reasoning_effort")
+                or payload.get("effort")
+                or ""
+            ).strip(),
+            "personality": str(payload.get("personality") or "").strip(),
+            "collaboration_mode": str(
+                (collaboration_mode or {}).get("mode") if isinstance(collaboration_mode, dict) else ""
+            ).strip(),
+        }
+        if any(model_profile.values()):
+            rows.append(
+                {
+                    "timestamp": timestamp,
+                    "thread_id": thread.thread_id,
+                    "thread_name": thread.preferred_title,
+                    "session_path": str(session_path),
+                    "turn_id": turn_id,
+                    "kind": "model_profile",
+                    "fingerprint": _fingerprint_payload(model_profile),
+                    **model_profile,
+                }
+            )
+
+    return rows
+
+
 def _parse_thread_read_events(
     source_path: Path,
     thread: ThreadSelection,
@@ -443,26 +720,28 @@ def _parse_thread_read_events(
             if not isinstance(item, dict):
                 continue
             item_type = str(item.get("type") or "")
-            if item_type == "userMessage":
+            if item_type in {"userMessage", "user_message"}:
+                raw_text, attachments = _extract_thread_read_message_parts(item)
                 append_event(
                     {
                         "actor": "user",
                         "kind": "message",
                         "phase": "conversation",
                         "text": sanitize_text(
-                            _extract_thread_read_user_text(item),
+                            raw_text or _format_attachment_summary(attachments),
                             profile=redaction_profile,
                         ),
                     }
                 )
-            elif item_type == "agentMessage":
+            elif item_type in {"agentMessage", "assistantMessage", "assistant_message"}:
+                raw_text, attachments = _extract_thread_read_message_parts(item)
                 append_event(
                     {
                         "actor": "assistant",
                         "kind": "message",
                         "phase": str(item.get("phase") or "conversation"),
                         "text": sanitize_text(
-                            str(item.get("text") or ""),
+                            raw_text or _format_attachment_summary(attachments),
                             profile=redaction_profile,
                         ),
                     }
@@ -506,6 +785,126 @@ def _parse_thread_read_events(
     return rows
 
 
+def _parse_thread_read_transcript_entries(
+    source_path: Path,
+    thread: ThreadSelection,
+    *,
+    redaction_profile: str,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict[str, Any]]:
+    payload_root = json.loads(source_path.read_text(encoding="utf-8", errors="replace"))
+    thread_payload = _extract_thread_read_thread(payload_root)
+    if not isinstance(thread_payload, dict):
+        return []
+
+    base_timestamp = _coerce_timestamp(
+        thread_payload.get("createdAt"),
+        fallback=thread_payload.get("updatedAt"),
+    )
+    sequence = 0
+    rows: list[dict[str, Any]] = []
+
+    def append_entry(entry: dict[str, Any] | None) -> None:
+        nonlocal sequence
+        if not entry:
+            return
+
+        timestamp = _offset_timestamp(base_timestamp, sequence)
+        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
+            return
+
+        sequence += 1
+        entry["timestamp"] = timestamp
+        entry["sequence"] = sequence
+        entry["thread_id"] = thread.thread_id
+        rows.append(entry)
+
+    turns = thread_payload.get("turns")
+    if not isinstance(turns, list):
+        return rows
+
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        items = turn.get("items")
+        if not isinstance(items, list):
+            continue
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            item_type = str(item.get("type") or "")
+            if item_type in {"userMessage", "user_message"}:
+                raw_text, attachments = _extract_thread_read_message_parts(item)
+                if raw_text or attachments:
+                    append_entry(
+                        {
+                            "actor": "user",
+                            "phase": "conversation",
+                            "mode": None,
+                            "text": sanitize_multiline_text(raw_text, profile=redaction_profile),
+                            "attachments": attachments,
+                        }
+                    )
+            elif item_type in {"agentMessage", "assistantMessage", "assistant_message"}:
+                raw_text, attachments = _extract_thread_read_message_parts(item)
+                if raw_text or attachments:
+                    append_entry(
+                        {
+                            "actor": "assistant",
+                            "phase": str(item.get("phase") or "conversation"),
+                            "mode": None,
+                            "text": sanitize_multiline_text(raw_text, profile=redaction_profile),
+                            "attachments": attachments,
+                        }
+                    )
+
+    return rows
+
+
+def _parse_thread_read_environment_observations(
+    source_path: Path,
+    thread: ThreadSelection,
+    *,
+    date_from: str | None,
+    date_to: str | None,
+) -> list[dict[str, Any]]:
+    payload_root = json.loads(source_path.read_text(encoding="utf-8", errors="replace"))
+    thread_payload = _extract_thread_read_thread(payload_root)
+    if not isinstance(thread_payload, dict):
+        return []
+
+    timestamp = _coerce_timestamp(
+        thread_payload.get("createdAt"),
+        fallback=thread_payload.get("updatedAt"),
+    )
+    if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
+        return []
+
+    runtime_payload = {
+        "cli_version": str(thread_payload.get("cliVersion") or "").strip(),
+        "originator": "",
+        "source": str(thread_payload.get("source") or "").strip(),
+        "model_provider": str(thread_payload.get("modelProvider") or "").strip(),
+    }
+    if not any(runtime_payload.values()):
+        return []
+
+    return [
+        {
+            "timestamp": timestamp,
+            "thread_id": thread.thread_id,
+            "thread_name": thread.preferred_title,
+            "session_path": str(source_path),
+            "kind": "client_runtime",
+            "fingerprint": _fingerprint_payload(runtime_payload),
+            **runtime_payload,
+        }
+    ]
+
+
 def _extract_thread_read_thread(payload_root: dict[str, Any]) -> dict[str, Any]:
     result = payload_root.get("result")
     if isinstance(result, dict):
@@ -521,21 +920,7 @@ def _extract_thread_read_thread(payload_root: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_thread_read_user_text(item: dict[str, Any]) -> str:
-    if isinstance(item.get("text"), str):
-        return str(item.get("text") or "")
-
-    content = item.get("content")
-    if not isinstance(content, list):
-        return ""
-
-    parts: list[str] = []
-    for content_item in content:
-        if not isinstance(content_item, dict):
-            continue
-        if isinstance(content_item.get("text"), str):
-            parts.append(str(content_item.get("text") or ""))
-
-    return " ".join(parts)
+    return _extract_thread_read_message_parts(item)[0]
 
 
 def _extract_thread_read_reasoning_text(item: dict[str, Any]) -> str:
@@ -550,6 +935,184 @@ def _extract_thread_read_reasoning_text(item: dict[str, Any]) -> str:
         elif isinstance(summary_item, dict) and isinstance(summary_item.get("text"), str):
             parts.append(str(summary_item.get("text") or ""))
     return " ".join(parts)
+
+
+def _extract_response_message_transcript_parts(payload: dict[str, Any]) -> tuple[str, list[str]]:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return "", []
+
+    text_parts: list[str] = []
+    attachments: list[str] = []
+
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+
+        item_type = str(item.get("type") or "")
+        if item_type in {"input_text", "output_text"}:
+            text = str(item.get("text") or "")
+            if text.strip() in {"<image>", "<file>"}:
+                continue
+            text_parts.append(text)
+            continue
+
+        attachment_label = _extract_attachment_label(item)
+        if attachment_label:
+            attachments.append(attachment_label)
+
+    return _normalize_raw_text("".join(text_parts)), attachments
+
+
+def _extract_event_message_attachments(payload: dict[str, Any]) -> list[str]:
+    attachments: list[str] = []
+
+    images = payload.get("images")
+    if isinstance(images, list):
+        attachments.extend(_extract_attachment_label({"type": "input_image", "image_url": image}) for image in images)
+
+    local_images = payload.get("local_images")
+    if isinstance(local_images, list):
+        for image in local_images:
+            attachments.append(_file_label_from_unknown_payload(image, fallback="image attached"))
+
+    text_elements = payload.get("text_elements")
+    if isinstance(text_elements, list):
+        for element in text_elements:
+            label = _file_label_from_unknown_payload(element, fallback="text element attached")
+            if label:
+                attachments.append(label)
+
+    return [item for item in attachments if item]
+
+
+def _extract_thread_read_message_parts(item: dict[str, Any]) -> tuple[str, list[str]]:
+    content = item.get("content")
+    text_parts: list[str] = []
+    attachments: list[str] = []
+
+    if isinstance(content, list):
+        for content_item in content:
+            if not isinstance(content_item, dict):
+                continue
+
+            item_type = str(content_item.get("type") or "")
+            if item_type in {"text", "input_text", "output_text"} or isinstance(content_item.get("text"), str):
+                text = str(content_item.get("text") or "")
+                if text.strip() not in {"", "<image>", "<file>"}:
+                    text_parts.append(text)
+
+            attachment_label = _extract_attachment_label(content_item)
+            if attachment_label:
+                attachments.append(attachment_label)
+
+    if not text_parts and isinstance(item.get("text"), str):
+        fallback_text = str(item.get("text") or "")
+        if fallback_text.strip() and fallback_text.strip() not in {"<image>", "<file>"}:
+            text_parts.append(fallback_text)
+
+    attachments.extend(_extract_event_message_attachments(item))
+
+    raw_attachments = item.get("attachments")
+    if isinstance(raw_attachments, list):
+        for raw_attachment in raw_attachments:
+            attachments.append(_file_label_from_unknown_payload(raw_attachment, fallback="file attached"))
+
+    return _normalize_raw_text("".join(text_parts)), _dedupe_labels(attachments)
+
+
+def _dedupe_labels(labels: list[str]) -> list[str]:
+    seen: set[str] = set()
+    rows: list[str] = []
+    for label in labels:
+        normalized = str(label or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        rows.append(normalized)
+    return rows
+
+
+def _format_attachment_summary(attachments: list[str]) -> str:
+    if not attachments:
+        return ""
+    return "Attachments: " + ", ".join(attachments)
+
+
+def _extract_thread_read_attachments(item: dict[str, Any]) -> list[str]:
+    return _extract_thread_read_message_parts(item)[1]
+
+
+def _extract_attachment_label(item: dict[str, Any]) -> str:
+    item_type = str(item.get("type") or "")
+    if item_type in {"input_image", "image_url", "local_image"}:
+        return _file_label_from_unknown_payload(item, fallback="image attached")
+    if item_type in {"input_file", "local_file", "file"}:
+        return _file_label_from_unknown_payload(item, fallback="file attached")
+    return ""
+
+
+def _file_label_from_unknown_payload(value: Any, *, fallback: str) -> str:
+    if isinstance(value, str):
+        return _file_label_from_string(value, fallback=fallback)
+
+    if not isinstance(value, dict):
+        return fallback
+
+    for key in ("filename", "file_name", "name", "path", "file_path", "local_path"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return _file_label_from_string(candidate, fallback=fallback)
+
+    image_url = value.get("image_url")
+    if isinstance(image_url, str) and image_url.strip():
+        return _file_label_from_string(image_url, fallback=fallback)
+
+    return fallback
+
+
+def _file_label_from_string(value: str, *, fallback: str) -> str:
+    text = value.strip()
+    if not text:
+        return fallback
+
+    if text.startswith("data:image/"):
+        return "image attached"
+    if text.startswith("data:"):
+        return fallback
+
+    normalized = text.replace("\\", "/").rstrip("/")
+    if "/" in normalized:
+        leaf = normalized.rsplit("/", 1)[-1]
+        return leaf or fallback
+    return normalized
+
+
+def _normalize_raw_text(raw_text: str | None) -> str:
+    if not raw_text:
+        return ""
+    return raw_text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _fingerprint_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _fingerprint_payload(payload: dict[str, Any]) -> str:
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return _fingerprint_text(serialized)
+
+
+def _should_skip_transcript_message(role: str, raw_text: str) -> bool:
+    if role != "user":
+        return False
+
+    text = raw_text.lstrip()
+    if text.startswith("# AGENTS.md instructions for "):
+        return True
+    if "<INSTRUCTIONS>" in text and "Global Operating Rules" in text:
+        return True
+    return False
 
 
 def _coerce_timestamp(value: Any, *, fallback: Any = None) -> str | None:

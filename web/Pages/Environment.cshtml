@@ -1,0 +1,217 @@
+@page "/environment"
+@model TimelineForWindowsCodex.Web.Pages.EnvironmentModel
+@using Microsoft.AspNetCore.WebUtilities
+@using TimelineForWindowsCodex.Web.Infrastructure
+@inject TimelineForWindowsCodex.Web.Services.LanguageService LanguageService
+@inject TimelineForWindowsCodex.Web.Services.JsonLocalizationService Localizer
+@{
+    var lang = LanguageService.Resolve(ViewContext.HttpContext.Request);
+    string L(string key) => Localizer.Get(lang, key);
+    string LinkWithLang(string href) => QueryHelpers.AddQueryString(href, "lang", lang);
+    ViewData["Title"] = L("environment.page_title");
+
+    string FormatCreatedAt(string? value) => DisplayFormatters.FormatCreatedAt(value);
+
+    var fidelityReport = Model.CurrentRun?.FidelityReport;
+    var sourceTypes = fidelityReport?.SourceTypes
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var includedItems = fidelityReport?.Included
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var limitationItems = fidelityReport?.Limitations
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var warningItems = (fidelityReport?.Warnings ?? [])
+        .Concat(Model.CurrentRun?.Status?.Warnings ?? [])
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+}
+
+<section class="app-page space-y-6">
+    <header class="panel page-header">
+        <div>
+            <p class="eyebrow">@L("environment.eyebrow")</p>
+            <h1 class="page-title">@L("environment.page_title")</h1>
+            <p class="page-description">@L("environment.description")</p>
+        </div>
+    </header>
+
+    <section class="panel space-y-4">
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <h2 class="section-title">@L("environment.scope_title")</h2>
+                <p class="text-sm text-slate-600">@L("environment.scope_description")</p>
+            </div>
+            <a class="btn-secondary" href="@LinkWithLang("/settings")">@L("environment.open_settings")</a>
+        </div>
+
+        <div class="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <div class="space-y-4">
+                <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="text-sm font-medium text-slate-900">@L("jobs.new.primary_root")</div>
+                    <div class="mt-2 break-all text-sm text-slate-700">@Model.Settings.DefaultPrimaryCodexHomePath</div>
+                </article>
+
+                <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="text-sm font-medium text-slate-900">@L("jobs.new.backup_roots")</div>
+                    @if (Model.Settings.DefaultBackupCodexHomePaths.Count == 0)
+                    {
+                        <div class="mt-2 text-sm text-slate-500">@L("details.none")</div>
+                    }
+                    else
+                    {
+                        <ul class="modal-list mt-2">
+                            @foreach (var item in Model.Settings.DefaultBackupCodexHomePaths)
+                            {
+                                <li class="modal-list-item break-all">@item</li>
+                            }
+                        </ul>
+                    }
+                </article>
+
+                <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="text-sm font-medium text-slate-900">@L("settings.enrichment_roots")</div>
+                    @if (Model.Settings.DefaultEnrichmentRootPaths.Count == 0)
+                    {
+                        <div class="mt-2 text-sm text-slate-500">@L("details.none")</div>
+                    }
+                    else
+                    {
+                        <ul class="modal-list mt-2">
+                            @foreach (var item in Model.Settings.DefaultEnrichmentRootPaths)
+                            {
+                                <li class="modal-list-item break-all">@item</li>
+                            }
+                        </ul>
+                    }
+                </article>
+            </div>
+
+            <div class="grid gap-4">
+                <div class="metric-card">
+                    <div class="metric-label">@L("jobs.new.redaction")</div>
+                    <div class="metric-value">@Model.Settings.DefaultRedactionProfile</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("jobs.new.include_archived")</div>
+                    <div class="metric-value">@(Model.Settings.DefaultIncludeArchivedSources ? L("environment.enabled") : L("environment.disabled"))</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("jobs.new.include_tool_outputs")</div>
+                    <div class="metric-value">@(Model.Settings.DefaultIncludeToolOutputs ? L("environment.enabled") : L("environment.disabled"))</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("settings.ui_language")</div>
+                    <div class="metric-value">@Model.Settings.UiLanguage</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel space-y-4">
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <h2 class="section-title">@L("environment.coverage_title")</h2>
+                <p class="text-sm text-slate-600">@L("environment.coverage_description")</p>
+            </div>
+            @if (Model.CurrentArtifact is not null)
+            {
+                <a class="btn-secondary" href="@LinkWithLang($"/exports/{Model.CurrentArtifact.JobId}")">@L("common.details")</a>
+            }
+        </div>
+
+        @if (Model.CurrentArtifact is null || fidelityReport is null)
+        {
+            <div class="empty-state">@L("environment.coverage_missing")</div>
+        }
+        else
+        {
+            <div class="grid gap-4 xl:grid-cols-4">
+                <div class="metric-card">
+                    <div class="metric-label">@L("environment.latest_sync")</div>
+                    <div class="metric-value">@FormatCreatedAt(Model.CurrentArtifact.UpdatedAt)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("details.thread_count")</div>
+                    <div class="metric-value">@fidelityReport.ThreadCount</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("details.limitations")</div>
+                    <div class="metric-value">@limitationItems.Count</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("details.warnings")</div>
+                    <div class="metric-value">@warningItems.Count</div>
+                </div>
+            </div>
+
+            <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <article class="space-y-3">
+                    <div class="text-sm font-medium text-slate-900">@L("details.source_types")</div>
+                    @if (sourceTypes.Count == 0)
+                    {
+                        <div class="text-sm text-slate-500">@L("details.none")</div>
+                    }
+                    else
+                    {
+                        <div class="flex flex-wrap gap-2">
+                            @foreach (var item in sourceTypes)
+                            {
+                                <span class="status-badge status-badge-neutral">@item</span>
+                            }
+                        </div>
+                    }
+
+                    <div class="text-sm font-medium text-slate-900">@L("details.included")</div>
+                    @if (includedItems.Count == 0)
+                    {
+                        <div class="text-sm text-slate-500">@L("details.none")</div>
+                    }
+                    else
+                    {
+                        <ul class="modal-list">
+                            @foreach (var item in includedItems)
+                            {
+                                <li class="modal-list-item">@item</li>
+                            }
+                        </ul>
+                    }
+                </article>
+
+                <article class="space-y-3">
+                    <div class="text-sm font-medium text-slate-900">@L("details.limitations")</div>
+                    @if (limitationItems.Count == 0)
+                    {
+                        <div class="text-sm text-slate-500">@L("details.none")</div>
+                    }
+                    else
+                    {
+                        <ul class="modal-list">
+                            @foreach (var item in limitationItems)
+                            {
+                                <li class="modal-list-item">@item</li>
+                            }
+                        </ul>
+                    }
+
+                    <div class="text-sm font-medium text-slate-900">@L("details.warnings")</div>
+                    @if (warningItems.Count == 0)
+                    {
+                        <div class="text-sm text-slate-500">@L("details.none")</div>
+                    }
+                    else
+                    {
+                        <ul class="modal-list">
+                            @foreach (var item in warningItems)
+                            {
+                                <li class="modal-list-item">@item</li>
+                            }
+                        </ul>
+                    }
+                </article>
+            </div>
+        }
+    </section>
+</section>

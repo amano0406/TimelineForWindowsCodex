@@ -17,13 +17,20 @@ public sealed class DiscoveredThreadDocument
 {
     public string ThreadId { get; set; } = "";
     public string PreferredTitle { get; set; } = "";
-    public List<string> TitleHistory { get; set; } = [];
+    public List<ObservedThreadNameDocument> ObservedThreadNames { get; set; } = [];
     public string SourceRootPath { get; set; } = "";
     public string SourceRootKind { get; set; } = "";
     public string SessionPath { get; set; } = "";
     public string? UpdatedAt { get; set; }
     public string? Cwd { get; set; }
     public string? FirstUserMessageExcerpt { get; set; }
+}
+
+public sealed class ObservedThreadNameDocument
+{
+    public string Name { get; set; } = "";
+    public string? ObservedAt { get; set; }
+    public string Source { get; set; } = "";
 }
 
 public sealed class CreateJobCommand
@@ -115,6 +122,41 @@ public sealed class TimelineItemDocument
     public string Preview { get; set; } = "";
 }
 
+public sealed class ArtifactPreviewDocument
+{
+    public string Label { get; set; } = "";
+    public string Path { get; set; } = "";
+    public string Preview { get; set; } = "";
+}
+
+public sealed class FidelityReportDocument
+{
+    public int SchemaVersion { get; set; } = 1;
+    public string JobId { get; set; } = "";
+    public int ThreadCount { get; set; }
+    public List<string> SourceTypes { get; set; } = [];
+    public List<string> Included { get; set; } = [];
+    public List<string> Limitations { get; set; } = [];
+    public List<string> Warnings { get; set; } = [];
+    public List<FidelityThreadDocument> Threads { get; set; } = [];
+}
+
+public sealed class FidelityThreadDocument
+{
+    public string ThreadId { get; set; } = "";
+    public string PreferredTitle { get; set; } = "";
+    public string SourceRootKind { get; set; } = "";
+    public string SourceType { get; set; } = "";
+    public string ResolvedSessionPath { get; set; } = "";
+    public int MessageCount { get; set; }
+    public int EventCount { get; set; }
+    public int SegmentCount { get; set; }
+    public int ObservedThreadNameCount { get; set; }
+    public bool HasMode { get; set; }
+    public int AttachmentCount { get; set; }
+    public List<string> Limitations { get; set; } = [];
+}
+
 public sealed class RunSummary
 {
     public string JobId { get; set; } = "";
@@ -126,10 +168,80 @@ public sealed class RunSummary
     public int EventsDone { get; set; }
     public double ProgressPercent { get; set; }
     public double? EstimatedRemainingSec { get; set; }
+    public string? CurrentThreadId { get; set; }
+    public string? CurrentThreadTitle { get; set; }
     public string? CreatedAt { get; set; }
     public string? UpdatedAt { get; set; }
     public double? ElapsedWallSec { get; set; }
     public bool HasDownloadableArchive { get; set; }
+}
+
+public sealed class CurrentArtifactDocument
+{
+    public int SchemaVersion { get; set; } = 1;
+    public string JobId { get; set; } = "";
+    public string State { get; set; } = "";
+    public string ProcessingMode { get; set; } = "";
+    public string UpdatedAt { get; set; } = "";
+    public string RunDirectory { get; set; } = "";
+    public string ArchivePath { get; set; } = "";
+    public string ReadmePath { get; set; } = "";
+    public string CatalogPath { get; set; } = "";
+    public string UpdateManifestPath { get; set; } = "";
+    public string FidelityReportPath { get; set; } = "";
+    public int ThreadCount { get; set; }
+    public int EventCount { get; set; }
+    public int ReusedThreadCount { get; set; }
+    public int RenderedThreadCount { get; set; }
+}
+
+public sealed class RefreshHistoryDocument
+{
+    public int SchemaVersion { get; set; } = 1;
+    public string RefreshId { get; set; } = "";
+    public string JobId { get; set; } = "";
+    public string State { get; set; } = "";
+    public string ProcessingMode { get; set; } = "";
+    public int ThreadCount { get; set; }
+    public int EventCount { get; set; }
+    public int ReusedThreadCount { get; set; }
+    public int RenderedThreadCount { get; set; }
+    public string ArchivePath { get; set; } = "";
+    public string CompletedAt { get; set; } = "";
+    public string Error { get; set; } = "";
+}
+
+public sealed class UpdateManifestDocument
+{
+    public int SchemaVersion { get; set; } = 1;
+    public string JobId { get; set; } = "";
+    public string PreviousJobId { get; set; } = "";
+    public string GeneratedAt { get; set; } = "";
+    public string ProcessingMode { get; set; } = "";
+    public UpdateManifestCountsDocument Counts { get; set; } = new();
+    public List<UpdateManifestThreadDocument> Threads { get; set; } = [];
+}
+
+public sealed class UpdateManifestCountsDocument
+{
+    public int New { get; set; }
+    public int Changed { get; set; }
+    public int Unchanged { get; set; }
+    public int Missing { get; set; }
+    public int Degraded { get; set; }
+}
+
+public sealed class UpdateManifestThreadDocument
+{
+    public string ThreadId { get; set; } = "";
+    public string PreferredTitle { get; set; } = "";
+    public string Status { get; set; } = "";
+    public string SourceType { get; set; } = "";
+    public string CacheStatus { get; set; } = "";
+    public int MessageCount { get; set; }
+    public int EventCount { get; set; }
+    public int PreviousMessageCount { get; set; }
+    public int PreviousEventCount { get; set; }
 }
 
 public sealed class RunDetails
@@ -141,7 +253,10 @@ public sealed class RunDetails
     public JobResultDocument? Result { get; set; }
     public List<ManifestThreadItemDocument> ManifestItems { get; set; } = [];
     public List<TimelineItemDocument> TimelineItems { get; set; } = [];
+    public List<ArtifactPreviewDocument> ArtifactPreviews { get; set; } = [];
+    public FidelityReportDocument? FidelityReport { get; set; }
+    public UpdateManifestDocument? UpdateManifest { get; set; }
+    public List<string> WorkerLogLines { get; set; } = [];
     public string? ArchivePath { get; set; }
     public double? ElapsedWallSec { get; set; }
 }
-

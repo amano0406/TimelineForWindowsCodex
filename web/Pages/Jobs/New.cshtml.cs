@@ -47,15 +47,13 @@ public sealed class NewModel(
     {
         await LoadDefaultsAsync(cancellationToken);
         await LoadThreadsAsync(cancellationToken);
-        if (DiscoveredThreads.Count == 1)
-        {
-            SelectedThreadIds = [DiscoveredThreads[0].ThreadId];
-        }
+        SelectAllThreadsIfEmpty();
     }
 
     public async Task<IActionResult> OnPostRefreshAsync(CancellationToken cancellationToken)
     {
         await LoadThreadsAsync(cancellationToken);
+        SelectAllThreadsIfEmpty();
         return Page();
     }
 
@@ -122,6 +120,19 @@ public sealed class NewModel(
             : PrimaryCodexHomePath.Trim();
         var backups = ParseLines(BackupCodexHomePathsText);
         DiscoveredThreads = await discoveryService.DiscoverAsync(primary, backups, IncludeArchivedSources, cancellationToken);
+    }
+
+    private void SelectAllThreadsIfEmpty()
+    {
+        if (SelectedThreadIds.Count > 0 || DiscoveredThreads.Count == 0)
+        {
+            return;
+        }
+
+        SelectedThreadIds = DiscoveredThreads
+            .Select(static thread => thread.ThreadId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string? NormalizeDate(string? value) =>

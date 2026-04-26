@@ -13,7 +13,7 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
     {
         public string ThreadId { get; init; } = "";
         public string PreferredTitle { get; set; } = "";
-        public List<string> TitleHistory { get; } = [];
+        public List<ObservedThreadNameDocument> ObservedThreadNames { get; } = [];
         public string SourceRootPath { get; set; } = "";
         public string SourceRootKind { get; set; } = "";
         public string SessionPath { get; set; } = "";
@@ -63,7 +63,14 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
             {
                 ThreadId = item.ThreadId,
                 PreferredTitle = item.PreferredTitle,
-                TitleHistory = item.TitleHistory.ToList(),
+                ObservedThreadNames = item.ObservedThreadNames
+                    .Select(static observation => new ObservedThreadNameDocument
+                    {
+                        Name = observation.Name,
+                        ObservedAt = observation.ObservedAt,
+                        Source = observation.Source,
+                    })
+                    .ToList(),
                 SourceRootPath = item.SourceRootPath,
                 SourceRootKind = item.SourceRootKind,
                 SessionPath = item.SessionPath,
@@ -121,12 +128,7 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
                     : null;
 
                 var thread = GetOrCreate(threadId, rootPath, rootKind, priority, threads);
-                if (!string.IsNullOrWhiteSpace(sanitizedTitle) &&
-                    !thread.TitleHistory.Contains(sanitizedTitle, StringComparer.Ordinal))
-                {
-                    thread.TitleHistory.Add(sanitizedTitle);
-                    thread.PreferredTitle = sanitizedTitle;
-                }
+                AddObservedThreadName(thread, sanitizedTitle, updatedAt, "session_index.jsonl");
 
                 if (!string.IsNullOrWhiteSpace(updatedAt) &&
                     ParseUpdatedAt(updatedAt) >= ParseUpdatedAt(thread.UpdatedAt))
@@ -196,7 +198,7 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
 
                 if (string.IsNullOrWhiteSpace(thread.PreferredTitle))
                 {
-                    thread.PreferredTitle = $"Thread {thread.ThreadId}";
+                    thread.PreferredTitle = thread.ThreadId;
                 }
             }
             catch (Exception ex)
@@ -221,12 +223,47 @@ public sealed partial class CodexDiscoveryService(ILogger<CodexDiscoveryService>
                 SourceRootPath = rootPath,
                 SourceRootKind = rootKind,
                 Priority = priority,
-                PreferredTitle = $"Thread {threadId}",
+                PreferredTitle = threadId,
             };
             threads[threadId] = thread;
         }
 
         return thread;
+    }
+
+    private static void AddObservedThreadName(
+        MutableThread thread,
+        string? rawName,
+        string? observedAt,
+        string source)
+    {
+        if (string.IsNullOrWhiteSpace(rawName))
+        {
+            return;
+        }
+
+        var name = rawName.Trim();
+        if (thread.ObservedThreadNames.Any(item =>
+                string.Equals(item.Name, name, StringComparison.Ordinal) &&
+                string.Equals(item.ObservedAt, observedAt, StringComparison.Ordinal) &&
+                string.Equals(item.Source, source, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        thread.ObservedThreadNames.Add(new ObservedThreadNameDocument
+        {
+            Name = name,
+            ObservedAt = observedAt,
+            Source = source,
+        });
+
+        if (string.IsNullOrWhiteSpace(thread.PreferredTitle) ||
+            string.Equals(thread.PreferredTitle, thread.ThreadId, StringComparison.Ordinal) ||
+            ParseUpdatedAt(observedAt) >= ParseUpdatedAt(thread.UpdatedAt))
+        {
+            thread.PreferredTitle = name;
+        }
     }
 
     private static async Task<(string? ThreadId, string? UpdatedAt, string? Cwd, string? FirstUserMessageExcerpt)> ReadSessionPreviewAsync(

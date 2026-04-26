@@ -12,15 +12,23 @@
 
     string NavClass(string href)
     {
-        var isJobsSection = string.Equals(href, "/jobs", StringComparison.OrdinalIgnoreCase) &&
-            (string.Equals(currentPath, "/jobs", StringComparison.OrdinalIgnoreCase) ||
+        var isExportsSection = string.Equals(href, "/exports", StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(currentPath, "/exports", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(currentPath, "/jobs", StringComparison.OrdinalIgnoreCase) ||
+             (currentPath.StartsWith("/exports/", StringComparison.OrdinalIgnoreCase)) ||
              (currentPath.StartsWith("/jobs/", StringComparison.OrdinalIgnoreCase) &&
               !currentPath.StartsWith("/jobs/new", StringComparison.OrdinalIgnoreCase)));
 
+        var isThreadsSection = string.Equals(href, "/threads", StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(currentPath, "/threads", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(currentPath, "/jobs/new", StringComparison.OrdinalIgnoreCase));
+
         var isActive =
-            isJobsSection ||
+            isExportsSection ||
+            isThreadsSection ||
             string.Equals(currentPath, href, StringComparison.OrdinalIgnoreCase) ||
-            (!string.Equals(href, "/jobs", StringComparison.OrdinalIgnoreCase) &&
+            (!string.Equals(href, "/exports", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(href, "/threads", StringComparison.OrdinalIgnoreCase) &&
              currentPath.StartsWith($"{href}/", StringComparison.OrdinalIgnoreCase));
 
         return isActive ? "nav-link nav-link-active" : "nav-link";
@@ -43,7 +51,7 @@
         <aside class="app-sidebar">
             <div class="space-y-6">
                 <div class="space-y-3">
-                    <a href="@LinkWithLang("/jobs/new")" class="brand-link">
+                    <a href="@LinkWithLang("/")" class="brand-link">
                         <div class="space-y-1">
                             <div class="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">@L("layout.brand_eyebrow")</div>
                             <div class="text-xl font-semibold text-slate-950">TimelineForWindowsCodex</div>
@@ -53,8 +61,10 @@
                 </div>
 
                 <nav class="space-y-2">
-                    <a href="@LinkWithLang("/jobs/new")" class="@NavClass("/jobs/new")">@L("layout.new_job")</a>
-                    <a href="@LinkWithLang("/jobs")" class="@NavClass("/jobs")">@L("layout.jobs")</a>
+                    <a href="@LinkWithLang("/")" class="@NavClass("/")">@L("layout.overview")</a>
+                    <a href="@LinkWithLang("/threads")" class="@NavClass("/threads")">@L("layout.threads")</a>
+                    <a href="@LinkWithLang("/environment")" class="@NavClass("/environment")">@L("layout.environment")</a>
+                    <a href="@LinkWithLang("/exports")" class="@NavClass("/exports")">@L("layout.exports")</a>
                     <a href="@LinkWithLang("/settings")" class="@NavClass("/settings")">@L("layout.settings")</a>
                 </nav>
 

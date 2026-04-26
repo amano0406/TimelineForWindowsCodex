@@ -1,6 +1,7 @@
 @page "/jobs/{id}"
 @model TimelineForWindowsCodex.Web.Pages.Jobs.DetailsModel
 @using TimelineForWindowsCodex.Web.Infrastructure
+@using TimelineForWindowsCodex.Web.Models
 @using Microsoft.AspNetCore.WebUtilities
 @inject TimelineForWindowsCodex.Web.Services.LanguageService LanguageService
 @inject TimelineForWindowsCodex.Web.Services.JsonLocalizationService Localizer
@@ -24,6 +25,30 @@
         return label == key ? value ?? "-" : label;
     }
 
+    string ProcessingModeLabel(string? value)
+    {
+        var key = $"details.processing_mode_{(value ?? string.Empty).ToLowerInvariant()}";
+        var label = L(key);
+        return label == key ? value ?? "-" : label;
+    }
+
+    string UpdateStatusLabel(string? value)
+    {
+        var key = $"details.update_status_{(value ?? string.Empty).ToLowerInvariant()}";
+        var label = L(key);
+        return label == key ? value ?? "-" : label;
+    }
+
+    string UpdateStatusBadgeClass(string? value) => (value ?? string.Empty).ToLowerInvariant() switch
+    {
+        "new" => "status-badge status-badge-success",
+        "changed" => "status-badge status-badge-info",
+        "unchanged" => "status-badge status-badge-neutral",
+        "missing" => "status-badge status-badge-warning",
+        "degraded" => "status-badge status-badge-danger",
+        _ => "status-badge status-badge-neutral",
+    };
+
     string FormatDuration(double? valueSeconds) => valueSeconds.HasValue
         ? DisplayFormatters.FormatDurationFriendly(valueSeconds, L)
         : "-";
@@ -44,6 +69,42 @@
 }
 else
 {
+    var fidelityReport = Model.Run.FidelityReport;
+    var updateManifest = Model.Run.UpdateManifest;
+    var fidelityMessageCount = fidelityReport?.Threads.Sum(static item => item.MessageCount) ?? 0;
+    var fidelityAttachmentCount = fidelityReport?.Threads.Sum(static item => item.AttachmentCount) ?? 0;
+    var fidelityModeThreadCount = fidelityReport?.Threads.Count(static item => item.HasMode) ?? 0;
+    var fidelityThreadCount = fidelityReport?.ThreadCount ?? 0;
+    var fidelitySourceTypes = fidelityReport?.SourceTypes
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var statusWarnings = Model.Run.Status?.Warnings
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var reportWarnings = fidelityReport?.Warnings
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var missingSourceCount = fidelityReport?.Threads.Count(static item =>
+        string.Equals(item.SourceType, "missing", StringComparison.OrdinalIgnoreCase) ||
+        item.Limitations.Any(static limitation => limitation.StartsWith("Source file could not", StringComparison.OrdinalIgnoreCase))) ?? 0;
+    var archivedSourceCount = fidelityReport?.Threads.Count(static item =>
+        string.Equals(item.SourceType, "thread_read_json", StringComparison.OrdinalIgnoreCase)) ?? 0;
+    var limitedThreadCount = fidelityReport?.Threads.Count(static item => item.Limitations.Count > 0) ?? 0;
+    Dictionary<string, UpdateManifestThreadDocument> updateThreadsById = updateManifest is null
+        ? new(StringComparer.OrdinalIgnoreCase)
+        : updateManifest.Threads
+            .Where(static item => !string.IsNullOrWhiteSpace(item.ThreadId))
+            .GroupBy(static item => item.ThreadId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(static group => group.Key, static group => group.Last(), StringComparer.OrdinalIgnoreCase);
+    var degradedThreads = updateManifest?.Threads
+        .Where(static item => string.Equals(item.Status, "degraded", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(static item => item.PreferredTitle, StringComparer.CurrentCultureIgnoreCase)
+        .ToList() ?? [];
+    var missingThreads = updateManifest?.Threads
+        .Where(static item => string.Equals(item.Status, "missing", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(static item => item.PreferredTitle, StringComparer.CurrentCultureIgnoreCase)
+        .ToList() ?? [];
+
     <section class="app-page space-y-6">
         <header class="panel page-header">
             <div>
@@ -54,7 +115,7 @@ else
         </header>
 
         <section class="panel">
-            <div class="grid gap-4 xl:grid-cols-5">
+            <div class="grid gap-4 xl:grid-cols-6">
                 <div class="metric-card xl:col-span-2">
                     <div class="metric-label">@L("common.state")</div>
                     <div class="metric-value">@StateLabel(Model.Run.Status?.State)</div>
@@ -73,10 +134,27 @@ else
                     <div class="metric-label">@L("common.elapsed")</div>
                     <div class="metric-value">@FormatDuration(Model.Run.ElapsedWallSec)</div>
                 </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("details.eta")</div>
+                    <div class="metric-value">@FormatDuration(Model.Run.Status?.EstimatedRemainingSec)</div>
+                </div>
             </div>
 
             <div class="progress-track mt-4">
                 <div class="progress-fill" style="width:@((Model.Run.Status?.ProgressPercent ?? 0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+            </div>
+
+            <div class="mt-4 grid gap-4 lg:grid-cols-3">
+                <article class="metric-card lg:col-span-2">
+                    <div class="metric-label">@L("details.current_thread")</div>
+                    <div class="metric-value break-all">@(Model.Run.Status?.CurrentThreadTitle ?? "-")</div>
+                    <div class="metric-subtle break-all">@(Model.Run.Status?.CurrentThreadId ?? "-")</div>
+                </article>
+                <article class="metric-card">
+                    <div class="metric-label">@L("details.status_message")</div>
+                    <div class="metric-value">@StageLabel(Model.Run.Status?.CurrentStage)</div>
+                    <div class="metric-subtle">@(Model.Run.Status?.Message ?? "-")</div>
+                </article>
             </div>
         </section>
 
@@ -86,8 +164,283 @@ else
                 {
                     <a class="btn-primary" href="@LinkWithLang(JobUrls.Download(Model.Run.JobId))">@L("common.zip")</a>
                 }
-                <a class="btn-secondary" href="@LinkWithLang("/jobs")">@L("common.back_to_jobs")</a>
+                <a class="btn-secondary" href="@LinkWithLang("/exports")">@L("common.back_to_jobs")</a>
             </div>
+        </section>
+
+        <section class="panel space-y-4">
+            <div>
+                <h2 class="section-title">@L("details.refresh_summary_title")</h2>
+                <p class="text-sm text-slate-600">@L("details.refresh_summary_description")</p>
+            </div>
+
+            @if (updateManifest is null)
+            {
+                <div class="empty-state">@L("details.refresh_summary_missing")</div>
+            }
+            else
+            {
+                <div class="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                    <div class="metric-card xl:col-span-2">
+                        <div class="metric-label">@L("details.processing_mode")</div>
+                        <div class="metric-value">@ProcessingModeLabel(updateManifest.ProcessingMode)</div>
+                        <div class="metric-subtle">@L("details.previous_run"): @(string.IsNullOrWhiteSpace(updateManifest.PreviousJobId) ? "-" : updateManifest.PreviousJobId)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_new")</div>
+                        <div class="metric-value">@updateManifest.Counts.New</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_changed")</div>
+                        <div class="metric-value">@updateManifest.Counts.Changed</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_unchanged")</div>
+                        <div class="metric-value">@updateManifest.Counts.Unchanged</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_missing")</div>
+                        <div class="metric-value">@updateManifest.Counts.Missing</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_degraded")</div>
+                        <div class="metric-value">@updateManifest.Counts.Degraded</div>
+                    </div>
+                </div>
+
+                @if (degradedThreads.Count > 0 || missingThreads.Count > 0)
+                {
+                    <div class="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+                        <div class="font-medium">@L("details.refresh_attention")</div>
+                        <ul class="modal-list mt-3">
+                            @foreach (var item in degradedThreads)
+                            {
+                                <li class="modal-list-item">@string.Format(System.Globalization.CultureInfo.CurrentCulture, L("details.degraded_thread_item"), item.PreferredTitle, item.ThreadId)</li>
+                            }
+                            @foreach (var item in missingThreads)
+                            {
+                                <li class="modal-list-item">@string.Format(System.Globalization.CultureInfo.CurrentCulture, L("details.missing_thread_item"), item.PreferredTitle, item.ThreadId)</li>
+                            }
+                        </ul>
+                    </div>
+                }
+            }
+        </section>
+
+        <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <section class="panel space-y-4">
+                <div>
+                    <h2 class="section-title">@L("details.fidelity_title")</h2>
+                    <p class="text-sm text-slate-600">@L("details.fidelity_description")</p>
+                </div>
+
+                @if (fidelityReport is null)
+                {
+                    <div class="empty-state">@L("details.fidelity_missing")</div>
+                }
+                else
+                {
+                    <div class="grid gap-3 sm:grid-cols-2">
+                        <div class="metric-card">
+                            <div class="metric-label">@L("details.thread_count")</div>
+                            <div class="metric-value">@fidelityThreadCount</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">@L("details.message_count")</div>
+                            <div class="metric-value">@fidelityMessageCount</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">@L("details.attachment_count")</div>
+                            <div class="metric-value">@fidelityAttachmentCount</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">@L("details.mode_coverage")</div>
+                            <div class="metric-value">@fidelityModeThreadCount / @fidelityThreadCount</div>
+                        </div>
+                    </div>
+
+                    <dl class="grid gap-4 text-sm text-slate-700">
+                        <div>
+                            <dt class="font-medium text-slate-900">@L("details.source_types")</dt>
+                            <dd class="mt-1">@(fidelitySourceTypes.Count == 0 ? L("details.none") : string.Join(", ", fidelitySourceTypes))</dd>
+                        </div>
+                        <div>
+                            <dt class="font-medium text-slate-900">@L("details.included")</dt>
+                            <dd class="mt-2">
+                                <ul class="modal-list">
+                                    @foreach (var item in fidelityReport.Included)
+                                    {
+                                        <li class="modal-list-item">@item</li>
+                                    }
+                                </ul>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="font-medium text-slate-900">@L("details.limitations")</dt>
+                            <dd class="mt-2">
+                                <ul class="modal-list">
+                                    @foreach (var item in fidelityReport.Limitations)
+                                    {
+                                        <li class="modal-list-item">@item</li>
+                                    }
+                                </ul>
+                            </dd>
+                        </div>
+                        @if (statusWarnings.Count > 0 || reportWarnings.Count > 0)
+                        {
+                            <div>
+                                <dt class="font-medium text-slate-900">@L("details.warnings")</dt>
+                                <dd class="mt-2">
+                                    <ul class="modal-list">
+                                        @foreach (var item in statusWarnings.Concat(reportWarnings))
+                                        {
+                                            <li class="modal-list-item">@item</li>
+                                        }
+                                    </ul>
+                                </dd>
+                            </div>
+                        }
+                    </dl>
+                }
+            </section>
+
+            <section class="panel space-y-4">
+                <div>
+                    <h2 class="section-title">@L("details.worker_log_title")</h2>
+                    <p class="text-sm text-slate-600">@L("details.worker_log_description")</p>
+                </div>
+
+                @if (Model.Run.WorkerLogLines.Count == 0)
+                {
+                    <div class="empty-state">@L("details.no_worker_log")</div>
+                }
+                else
+                {
+                    <pre class="overflow-x-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">@string.Join(Environment.NewLine, Model.Run.WorkerLogLines)</pre>
+                }
+            </section>
+        </div>
+
+        <section class="panel space-y-4">
+            <div>
+                <h2 class="section-title">@L("details.thread_coverage_title")</h2>
+                <p class="text-sm text-slate-600">@L("details.thread_coverage_description")</p>
+            </div>
+
+            @if (fidelityReport is null || fidelityReport.Threads.Count == 0)
+            {
+                <div class="empty-state">@L("details.thread_coverage_missing")</div>
+            }
+            else
+            {
+                <div class="grid gap-3 md:grid-cols-4">
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.source_types")</div>
+                        <div class="metric-value">@fidelitySourceTypes.Count</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.missing_sources")</div>
+                        <div class="metric-value">@missingSourceCount</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.archived_sources")</div>
+                        <div class="metric-value">@archivedSourceCount</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.limited_threads")</div>
+                        <div class="metric-value">@limitedThreadCount</div>
+                    </div>
+                </div>
+
+                <div class="table-shell">
+                    <table class="app-table">
+                        <thead>
+                            <tr>
+                                <th>@L("common.threads")</th>
+                                <th>@L("details.source_type")</th>
+                                <th>@L("details.message_count")</th>
+                                <th>@L("details.attachment_count")</th>
+                                <th>@L("details.observed_names")</th>
+                                <th>@L("details.update_status")</th>
+                                <th>@L("details.coverage_status")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var thread in fidelityReport.Threads.OrderBy(static item => item.PreferredTitle, StringComparer.CurrentCultureIgnoreCase))
+                            {
+                                updateThreadsById.TryGetValue(thread.ThreadId, out var updateThread);
+                                var coverageStatus = thread.SourceType.Equals("missing", StringComparison.OrdinalIgnoreCase)
+                                    ? L("details.coverage_missing")
+                                    : thread.Limitations.Count > 0
+                                        ? L("details.coverage_limited")
+                                        : L("details.coverage_available");
+
+                                <tr>
+                                    <td>
+                                        <div class="font-medium text-slate-900">@thread.PreferredTitle</div>
+                                        <div class="mt-1 text-xs text-slate-500 break-all">@thread.ThreadId</div>
+                                    </td>
+                                    <td>
+                                        <div>@thread.SourceType</div>
+                                        <div class="mt-1 text-xs text-slate-500">@thread.SourceRootKind</div>
+                                    </td>
+                                    <td>@thread.MessageCount</td>
+                                    <td>@thread.AttachmentCount</td>
+                                    <td>@thread.ObservedThreadNameCount</td>
+                                    <td>
+                                        <span class="@UpdateStatusBadgeClass(updateThread?.Status)">@UpdateStatusLabel(updateThread?.Status)</span>
+                                        @if (updateThread is not null)
+                                        {
+                                            <div class="mt-2 text-xs text-slate-500">
+                                                @updateThread.PreviousMessageCount -> @updateThread.MessageCount
+                                            </div>
+                                        }
+                                    </td>
+                                    <td>
+                                        <span class="status-badge status-badge-neutral">@coverageStatus</span>
+                                        @if (thread.Limitations.Count > 0)
+                                        {
+                                            <ul class="modal-list mt-2">
+                                                @foreach (var limitation in thread.Limitations)
+                                                {
+                                                    <li class="modal-list-item">@limitation</li>
+                                                }
+                                            </ul>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="panel space-y-4">
+            <div>
+                <h2 class="section-title">@L("details.export_preview_title")</h2>
+                <p class="text-sm text-slate-600">@L("details.export_preview_description")</p>
+            </div>
+
+            @if (Model.Run.ArtifactPreviews.Count == 0)
+            {
+                <div class="empty-state">@L("details.export_preview_missing")</div>
+            }
+            else
+            {
+                <div class="grid gap-4 xl:grid-cols-2">
+                    @foreach (var item in Model.Run.ArtifactPreviews)
+                    {
+                        <article class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                                <div class="font-medium text-slate-950">@item.Label</div>
+                                <div class="text-xs text-slate-500 break-all">@item.Path</div>
+                            </div>
+                            <pre class="mt-4 max-h-96 overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">@item.Preview</pre>
+                        </article>
+                    }
+                </div>
+            }
         </section>
 
         <div class="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">

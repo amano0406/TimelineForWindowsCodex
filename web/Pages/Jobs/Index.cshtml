@@ -37,6 +37,13 @@
         "failed" => "status-badge status-badge-danger",
         _ => "status-badge status-badge-neutral",
     };
+    var fidelityReport = Model.CurrentRun?.FidelityReport;
+    var includedItems = fidelityReport?.Included
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var limitationItems = fidelityReport?.Limitations
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
 }
 
 <section class="app-page space-y-6">
@@ -55,6 +62,139 @@
         </section>
     }
 
+    @if (!ViewData.ModelState.IsValid)
+    {
+        <section class="panel error-panel" asp-validation-summary="All"></section>
+    }
+
+    <section class="panel space-y-4">
+        <div class="mb-2 flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <p class="eyebrow">@L("jobs.list.current_artifact_eyebrow")</p>
+                <h2 class="section-title">@L("jobs.list.current_artifact_title")</h2>
+                <p class="text-sm text-slate-600">@L("jobs.list.current_artifact_description")</p>
+            </div>
+            <form method="post" asp-page-handler="RefreshCurrent" asp-route-lang="@lang">
+                <button class="btn-primary" type="submit">@L("jobs.list.refresh_current")</button>
+            </form>
+        </div>
+
+        @if (Model.CurrentArtifact is null)
+        {
+            <div class="empty-state">@L("jobs.list.no_current_artifact")</div>
+        }
+        else
+        {
+            <div class="grid gap-4 xl:grid-cols-7">
+                <div class="metric-card xl:col-span-2">
+                    <div class="metric-label">@L("common.job")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.JobId</div>
+                    <div class="metric-subtle">
+                        <span class="@StateBadgeClass(Model.CurrentArtifact.State)">@StateLabel(Model.CurrentArtifact.State)</span>
+                        <span class="ml-2">@Model.CurrentArtifact.ProcessingMode</span>
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.threads")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.ThreadCount</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.events")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.EventCount</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.updated")</div>
+                    <div class="metric-value">@FormatCreatedAt(Model.CurrentArtifact.UpdatedAt)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("jobs.list.reused_threads")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.ReusedThreadCount</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("jobs.list.rendered_threads")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.RenderedThreadCount</div>
+                </div>
+            </div>
+
+            <div class="mt-4 flex flex-wrap gap-2">
+                <a class="btn-secondary" href="@LinkWithLang(JobUrls.Details(Model.CurrentArtifact.JobId))">@L("common.details")</a>
+                @if (!string.IsNullOrWhiteSpace(Model.CurrentArtifact.ArchivePath) && System.IO.File.Exists(Model.CurrentArtifact.ArchivePath))
+                {
+                    <button
+                        type="button"
+                        class="btn-primary"
+                        data-confirm-open="true"
+                        data-confirm-kind="download"
+                        data-download-url="@LinkWithLang(JobUrls.Download(Model.CurrentArtifact.JobId))"
+                        data-confirm-title="@L("jobs.list.download_confirm_title")"
+                        data-confirm-body="@string.Format(System.Globalization.CultureInfo.CurrentCulture, L("jobs.list.download_confirm_body"), Model.CurrentArtifact.JobId)">
+                        @L("common.zip")
+                    </button>
+                }
+            </div>
+        }
+
+        @if (Model.RefreshHistory.Count > 0)
+        {
+            <div class="table-shell mt-4">
+                <table class="app-table">
+                    <thead>
+                        <tr>
+                            <th>@L("jobs.list.refresh_history")</th>
+                            <th>@L("common.state")</th>
+                            <th>@L("common.threads")</th>
+                            <th>@L("common.events")</th>
+                            <th>@L("jobs.list.reused_threads")</th>
+                            <th>@L("jobs.list.rendered_threads")</th>
+                            <th>@L("common.updated")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in Model.RefreshHistory)
+                        {
+                            <tr>
+                                <td>
+                                    <a class="table-link" href="@LinkWithLang(JobUrls.Details(row.JobId))">@row.JobId</a>
+                                    <div class="mt-1 text-xs text-slate-500">@row.ProcessingMode</div>
+                                </td>
+                                <td><span class="@StateBadgeClass(row.State)">@StateLabel(row.State)</span></td>
+                                <td>@row.ThreadCount</td>
+                                <td>@row.EventCount</td>
+                                <td>@row.ReusedThreadCount</td>
+                                <td>@row.RenderedThreadCount</td>
+                                <td>@FormatCreatedAt(row.CompletedAt)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        @if (includedItems.Count > 0 || limitationItems.Count > 0)
+        {
+            <div class="mt-4 grid gap-4 lg:grid-cols-2">
+                <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="text-sm font-medium text-slate-900">@L("details.included")</div>
+                    <ul class="modal-list mt-3">
+                        @foreach (var item in includedItems)
+                        {
+                            <li class="modal-list-item">@item</li>
+                        }
+                    </ul>
+                </article>
+                <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="text-sm font-medium text-slate-900">@L("details.limitations")</div>
+                    <ul class="modal-list mt-3">
+                        @foreach (var item in limitationItems)
+                        {
+                            <li class="modal-list-item">@item</li>
+                        }
+                    </ul>
+                </article>
+            </div>
+        }
+    </section>
+
     @if (Model.ActiveRun is not null)
     {
         <section class="panel">
@@ -65,7 +205,7 @@
                 </div>
             </div>
 
-            <div class="grid gap-4 xl:grid-cols-5">
+            <div class="grid gap-4 xl:grid-cols-6">
                 <div class="metric-card xl:col-span-2">
                     <div class="metric-label">@L("common.job")</div>
                     <div class="metric-value">@Model.ActiveRun.JobId</div>
@@ -87,10 +227,20 @@
                     <div class="metric-label">@L("common.elapsed")</div>
                     <div class="metric-value">@FormatDuration(Model.ActiveRun.ElapsedWallSec)</div>
                 </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("details.eta")</div>
+                    <div class="metric-value">@FormatDuration(Model.ActiveRun.EstimatedRemainingSec)</div>
+                </div>
             </div>
 
             <div class="progress-track mt-4">
                 <div class="progress-fill" style="width:@(Model.ActiveRun.ProgressPercent.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+            </div>
+
+            <div class="metric-card mt-4">
+                <div class="metric-label">@L("details.current_thread")</div>
+                <div class="metric-value break-all">@(Model.ActiveRun.CurrentThreadTitle ?? "-")</div>
+                <div class="metric-subtle break-all">@(Model.ActiveRun.CurrentThreadId ?? "-")</div>
             </div>
 
             <div class="mt-4">
@@ -153,13 +303,27 @@
                                         <a class="btn-table" href="@LinkWithLang(JobUrls.Details(run.JobId))">@L("common.details")</a>
                                         @if (run.HasDownloadableArchive)
                                         {
-                                            <a class="btn-table-success" href="@LinkWithLang(JobUrls.Download(run.JobId))">@L("common.zip")</a>
+                                            <button
+                                                type="button"
+                                                class="btn-table-success"
+                                                data-confirm-open="true"
+                                                data-confirm-kind="download"
+                                                data-download-url="@LinkWithLang(JobUrls.Download(run.JobId))"
+                                                data-confirm-title="@L("jobs.list.download_confirm_title")"
+                                                data-confirm-body="@string.Format(System.Globalization.CultureInfo.CurrentCulture, L("jobs.list.download_confirm_body"), run.JobId)">
+                                                @L("common.zip")
+                                            </button>
                                         }
-                                        <form method="post" asp-page-handler="Delete" asp-route-lang="@lang" class="inline"
-                                              onsubmit="return confirm('@L("jobs.list.delete_confirm")');">
-                                            <input type="hidden" name="jobId" value="@run.JobId" />
-                                            <button class="btn-table-danger" type="submit">@L("common.delete")</button>
-                                        </form>
+                                        <button
+                                            type="button"
+                                            class="btn-table-danger"
+                                            data-confirm-open="true"
+                                            data-confirm-kind="delete"
+                                            data-job-id="@run.JobId"
+                                            data-confirm-title="@L("jobs.list.delete_confirm_title")"
+                                            data-confirm-body="@string.Format(System.Globalization.CultureInfo.CurrentCulture, L("jobs.list.delete_confirm_body"), run.JobId)">
+                                            @L("common.delete")
+                                        </button>
                                     </div>
                                 </td>
                             </tr>
@@ -169,4 +333,81 @@
             </table>
         </div>
     </section>
+
+    <section class="modal-shell hidden" data-confirm-modal aria-hidden="true">
+        <div class="modal-backdrop" data-confirm-close="true"></div>
+        <div class="modal-card">
+            <div class="space-y-3">
+                <p class="eyebrow">@L("jobs.list.confirm_eyebrow")</p>
+                <h2 class="section-title" data-confirm-title>@L("jobs.list.download_confirm_title")</h2>
+                <p class="text-sm text-slate-600" data-confirm-body></p>
+            </div>
+
+            <div class="mt-6 flex flex-wrap gap-3">
+                <a class="btn-primary hidden" data-confirm-download href="#">@L("common.zip")</a>
+                <form method="post" asp-page-handler="Delete" asp-route-lang="@lang" class="hidden" data-confirm-delete-form>
+                    <input type="hidden" name="jobId" value="" data-confirm-delete-job-id />
+                    <button class="btn-table-danger" type="submit">@L("common.delete")</button>
+                </form>
+                <button type="button" class="btn-secondary" data-confirm-close="true">@L("common.cancel")</button>
+            </div>
+        </div>
+    </section>
 </section>
+
+@section Scripts
+{
+    <script>
+        (() => {
+            const modal = document.querySelector("[data-confirm-modal]");
+            if (!modal) {
+                return;
+            }
+
+            const titleNode = modal.querySelector("[data-confirm-title]");
+            const bodyNode = modal.querySelector("[data-confirm-body]");
+            const downloadButton = modal.querySelector("[data-confirm-download]");
+            const deleteForm = modal.querySelector("[data-confirm-delete-form]");
+            const deleteJobIdInput = modal.querySelector("[data-confirm-delete-job-id]");
+
+            const closeModal = () => {
+                modal.classList.add("hidden");
+                modal.setAttribute("aria-hidden", "true");
+                downloadButton.classList.add("hidden");
+                downloadButton.setAttribute("href", "#");
+                deleteForm.classList.add("hidden");
+                deleteJobIdInput.value = "";
+            };
+
+            const openModal = (trigger) => {
+                titleNode.textContent = trigger.dataset.confirmTitle || "";
+                bodyNode.textContent = trigger.dataset.confirmBody || "";
+
+                if (trigger.dataset.confirmKind === "download") {
+                    downloadButton.classList.remove("hidden");
+                    downloadButton.setAttribute("href", trigger.dataset.downloadUrl || "#");
+                } else if (trigger.dataset.confirmKind === "delete") {
+                    deleteForm.classList.remove("hidden");
+                    deleteJobIdInput.value = trigger.dataset.jobId || "";
+                }
+
+                modal.classList.remove("hidden");
+                modal.setAttribute("aria-hidden", "false");
+            };
+
+            for (const trigger of document.querySelectorAll("[data-confirm-open='true']")) {
+                trigger.addEventListener("click", () => openModal(trigger));
+            }
+
+            for (const closer of modal.querySelectorAll("[data-confirm-close='true']")) {
+                closer.addEventListener("click", closeModal);
+            }
+
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape" && !modal.classList.contains("hidden")) {
+                    closeModal();
+                }
+            });
+        })();
+    </script>
+}

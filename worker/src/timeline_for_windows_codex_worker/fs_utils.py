@@ -49,6 +49,13 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
             handle.write("\n")
 
 
+def append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    ensure_dir(path.parent)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False))
+        handle.write("\n")
+
+
 def append_log(path: Path, line: str) -> None:
     ensure_dir(path.parent)
     with path.open("a", encoding="utf-8") as handle:
@@ -60,4 +67,3 @@ def slugify(value: str) -> str:
     lowered = re.sub(r"[^a-z0-9]+", "-", lowered)
     lowered = re.sub(r"-{2,}", "-", lowered).strip("-")
     return lowered or "item"
-

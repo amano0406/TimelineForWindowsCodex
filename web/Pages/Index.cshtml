@@ -1,5 +1,362 @@
-﻿@page
+@page
 @model TimelineForWindowsCodex.Web.Pages.IndexModel
+@using Microsoft.AspNetCore.WebUtilities
+@using TimelineForWindowsCodex.Web.Infrastructure
+@using TimelineForWindowsCodex.Web.Models
+@inject TimelineForWindowsCodex.Web.Services.LanguageService LanguageService
+@inject TimelineForWindowsCodex.Web.Services.JsonLocalizationService Localizer
 @{
-    ViewData["Title"] = "Redirect";
+    var lang = LanguageService.Resolve(ViewContext.HttpContext.Request);
+    string L(string key) => Localizer.Get(lang, key);
+    string LinkWithLang(string href) => QueryHelpers.AddQueryString(href, "lang", lang);
+    ViewData["Title"] = L("overview.page_title");
+
+    string StateLabel(string? value)
+    {
+        var key = $"state.{(value ?? string.Empty).ToLowerInvariant()}";
+        var label = L(key);
+        return label == key ? value ?? "-" : label;
+    }
+
+    string ProcessingModeLabel(string? value)
+    {
+        var key = $"details.processing_mode_{(value ?? string.Empty).ToLowerInvariant()}";
+        var label = L(key);
+        return label == key ? value ?? "-" : label;
+    }
+
+    string FormatCreatedAt(string? value) => DisplayFormatters.FormatCreatedAt(value);
+    string FormatDuration(double? valueSeconds) => valueSeconds.HasValue
+        ? DisplayFormatters.FormatDurationFriendly(valueSeconds, L)
+        : "-";
+
+    var fidelityReport = Model.CurrentRun?.FidelityReport;
+    var updateManifest = Model.CurrentRun?.UpdateManifest;
+    var sourceTypes = fidelityReport?.SourceTypes
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var includedItems = fidelityReport?.Included
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var limitationItems = fidelityReport?.Limitations
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .ToList() ?? [];
+    var warningItems = (fidelityReport?.Warnings ?? [])
+        .Concat(Model.CurrentRun?.Status?.Warnings ?? [])
+        .Where(static item => !string.IsNullOrWhiteSpace(item))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
 }
+
+<section class="app-page space-y-6">
+    <header class="panel page-header">
+        <div>
+            <p class="eyebrow">@L("overview.eyebrow")</p>
+            <h1 class="page-title">@L("overview.page_title")</h1>
+            <p class="page-description">@L("overview.description")</p>
+        </div>
+    </header>
+
+    @if (Model.ActiveRun is not null)
+    {
+        <section class="panel">
+            <div class="mb-4 flex items-center justify-between gap-3">
+                <div>
+                    <p class="eyebrow">@L("overview.active_eyebrow")</p>
+                    <h2 class="section-title">@L("overview.active_title")</h2>
+                </div>
+                <a class="btn-secondary" href="@LinkWithLang(JobUrls.Details(Model.ActiveRun.JobId))">@L("common.details")</a>
+            </div>
+
+            <div class="grid gap-4 xl:grid-cols-5">
+                <div class="metric-card xl:col-span-2">
+                    <div class="metric-label">@L("overview.current_sync")</div>
+                    <div class="metric-value">@StateLabel(Model.ActiveRun.State)</div>
+                    <div class="metric-subtle break-all">@Model.ActiveRun.JobId</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.progress")</div>
+                    <div class="metric-value">@Model.ActiveRun.ProgressPercent.ToString("0.0")%</div>
+                    <div class="metric-subtle">@Model.ActiveRun.ThreadsDone / @Model.ActiveRun.ThreadsTotal @L("common.threads")</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.events")</div>
+                    <div class="metric-value">@Model.ActiveRun.EventsDone / @Model.ActiveRun.EventsTotal</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.elapsed")</div>
+                    <div class="metric-value">@FormatDuration(Model.ActiveRun.ElapsedWallSec)</div>
+                </div>
+            </div>
+
+            <div class="progress-track mt-4">
+                <div class="progress-fill" style="width:@(Model.ActiveRun.ProgressPercent.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+            </div>
+        </section>
+    }
+
+    <section class="panel">
+        <div class="mb-4 flex items-center justify-between gap-3">
+            <div>
+                <p class="eyebrow">@L("overview.current_eyebrow")</p>
+                <h2 class="section-title">@L("overview.current_title")</h2>
+                <p class="text-sm text-slate-600">@L("overview.current_description")</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <a class="btn-secondary" href="@LinkWithLang("/threads")">@L("overview.inspect_threads")</a>
+                <a class="btn-secondary" href="@LinkWithLang("/environment")">@L("overview.inspect_environment")</a>
+                <a class="btn-secondary" href="@LinkWithLang("/exports")">@L("layout.exports")</a>
+            </div>
+        </div>
+
+        @if (Model.CurrentArtifact is null)
+        {
+            <div class="empty-state">@L("overview.no_current_artifact")</div>
+        }
+        else
+        {
+            <div class="grid gap-4 xl:grid-cols-6">
+                <div class="metric-card xl:col-span-2">
+                    <div class="metric-label">@L("overview.latest_export")</div>
+                    <div class="metric-value">@FormatCreatedAt(Model.CurrentArtifact.UpdatedAt)</div>
+                    <div class="metric-subtle">@ProcessingModeLabel(Model.CurrentArtifact.ProcessingMode)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.threads")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.ThreadCount</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("common.events")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.EventCount</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("jobs.list.reused_threads")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.ReusedThreadCount</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">@L("jobs.list.rendered_threads")</div>
+                    <div class="metric-value">@Model.CurrentArtifact.RenderedThreadCount</div>
+                </div>
+            </div>
+
+            <div class="mt-4 flex flex-wrap gap-2">
+                <a class="btn-secondary" href="@LinkWithLang(JobUrls.Details(Model.CurrentArtifact.JobId))">@L("overview.inspect_export")</a>
+                @if (!string.IsNullOrWhiteSpace(Model.CurrentArtifact.ArchivePath) && System.IO.File.Exists(Model.CurrentArtifact.ArchivePath))
+                {
+                    <a class="btn-primary" href="@LinkWithLang(JobUrls.Download(Model.CurrentArtifact.JobId))">@L("overview.download_latest")</a>
+                }
+            </div>
+        }
+    </section>
+
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <section class="panel space-y-4">
+            <div>
+                <h2 class="section-title">@L("overview.coverage_title")</h2>
+                <p class="text-sm text-slate-600">@L("overview.coverage_description")</p>
+            </div>
+
+            @if (Model.CurrentRun is null || fidelityReport is null)
+            {
+                <div class="empty-state">@L("overview.coverage_missing")</div>
+            }
+            else
+            {
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.thread_count")</div>
+                        <div class="metric-value">@fidelityReport.ThreadCount</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.source_types")</div>
+                        <div class="metric-value">@sourceTypes.Count</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.limitations")</div>
+                        <div class="metric-value">@limitationItems.Count</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.warnings")</div>
+                        <div class="metric-value">@warningItems.Count</div>
+                    </div>
+                </div>
+
+                <div class="space-y-3">
+                    <div>
+                        <div class="text-sm font-medium text-slate-900">@L("details.source_types")</div>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            @if (sourceTypes.Count == 0)
+                            {
+                                <span class="status-badge status-badge-neutral">@L("details.none")</span>
+                            }
+                            else
+                            {
+                                @foreach (var item in sourceTypes)
+                                {
+                                    <span class="status-badge status-badge-neutral">@item</span>
+                                }
+                            }
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="text-sm font-medium text-slate-900">@L("details.included")</div>
+                        @if (includedItems.Count == 0)
+                        {
+                            <div class="text-sm text-slate-500">@L("details.none")</div>
+                        }
+                        else
+                        {
+                            <ul class="modal-list mt-2">
+                                @foreach (var item in includedItems.Take(6))
+                                {
+                                    <li class="modal-list-item">@item</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        <section class="panel space-y-4">
+            <div>
+                <h2 class="section-title">@L("overview.reliability_title")</h2>
+                <p class="text-sm text-slate-600">@L("overview.reliability_description")</p>
+            </div>
+
+            @if (Model.CurrentRun is null)
+            {
+                <div class="empty-state">@L("overview.reliability_missing")</div>
+            }
+            else
+            {
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_new")</div>
+                        <div class="metric-value">@(updateManifest?.Counts.New ?? 0)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_changed")</div>
+                        <div class="metric-value">@(updateManifest?.Counts.Changed ?? 0)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_missing")</div>
+                        <div class="metric-value">@(updateManifest?.Counts.Missing ?? 0)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">@L("details.update_counts_degraded")</div>
+                        <div class="metric-value">@(updateManifest?.Counts.Degraded ?? 0)</div>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="text-sm font-medium text-slate-900">@L("details.warnings")</div>
+                    @if (warningItems.Count == 0 && limitationItems.Count == 0)
+                    {
+                        <div class="mt-2 text-sm text-slate-500">@L("details.none")</div>
+                    }
+                    else
+                    {
+                        <ul class="modal-list mt-2">
+                            @foreach (var item in warningItems.Take(4))
+                            {
+                                <li class="modal-list-item">@item</li>
+                            }
+                            @foreach (var item in limitationItems.Take(Math.Max(0, 6 - warningItems.Count)))
+                            {
+                                <li class="modal-list-item">@item</li>
+                            }
+                        </ul>
+                    }
+                </div>
+            }
+        </section>
+    </div>
+
+    <section class="panel">
+        <div class="mb-4">
+            <h2 class="section-title">@L("overview.recent_refresh_title")</h2>
+            <p class="text-sm text-slate-600">@L("overview.recent_refresh_description")</p>
+        </div>
+
+        @if (Model.RefreshHistory.Count == 0)
+        {
+            <div class="empty-state">@L("overview.recent_refresh_missing")</div>
+        }
+        else
+        {
+            <div class="table-shell">
+                <table class="app-table">
+                    <thead>
+                        <tr>
+                            <th>@L("overview.current_sync")</th>
+                            <th>@L("common.state")</th>
+                            <th>@L("common.threads")</th>
+                            <th>@L("common.events")</th>
+                            <th>@L("common.updated")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in Model.RefreshHistory)
+                        {
+                            <tr>
+                                <td>
+                                    <a class="table-link" href="@LinkWithLang(JobUrls.Details(row.JobId))">@row.JobId</a>
+                                    <div class="mt-1 text-xs text-slate-500">@ProcessingModeLabel(row.ProcessingMode)</div>
+                                </td>
+                                <td>@StateLabel(row.State)</td>
+                                <td>@row.ThreadCount</td>
+                                <td>@row.EventCount</td>
+                                <td>@FormatCreatedAt(row.CompletedAt)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="panel">
+        <div class="mb-4 flex items-center justify-between gap-3">
+            <div>
+                <h2 class="section-title">@L("overview.recent_exports_title")</h2>
+                <p class="text-sm text-slate-600">@L("overview.recent_exports_description")</p>
+            </div>
+            <a class="btn-secondary" href="@LinkWithLang("/exports")">@L("overview.open_exports")</a>
+        </div>
+
+        @if (Model.RecentExports.Count == 0)
+        {
+            <div class="empty-state">@L("overview.recent_exports_missing")</div>
+        }
+        else
+        {
+            <div class="table-shell">
+                <table class="app-table">
+                    <thead>
+                        <tr>
+                            <th>@L("overview.latest_export")</th>
+                            <th>@L("common.state")</th>
+                            <th>@L("common.progress")</th>
+                            <th>@L("common.created")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in Model.RecentExports)
+                        {
+                            <tr>
+                                <td>
+                                    <a class="table-link" href="@LinkWithLang(JobUrls.Details(row.JobId))">@row.JobId</a>
+                                </td>
+                                <td>@StateLabel(row.State)</td>
+                                <td>@row.ProgressPercent.ToString("0.0")%</td>
+                                <td>@FormatCreatedAt(row.CreatedAt)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</section>

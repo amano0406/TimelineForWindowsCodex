@@ -42,9 +42,7 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
         var runDirectory = Path.Combine(paths.OutputsRoot, jobId);
         Directory.CreateDirectory(runDirectory);
         Directory.CreateDirectory(Path.Combine(runDirectory, "threads"));
-        Directory.CreateDirectory(Path.Combine(runDirectory, "llm"));
-        Directory.CreateDirectory(Path.Combine(runDirectory, "normalized"));
-        Directory.CreateDirectory(Path.Combine(runDirectory, "derived"));
+        Directory.CreateDirectory(Path.Combine(runDirectory, "environment"));
         Directory.CreateDirectory(Path.Combine(runDirectory, "export"));
         Directory.CreateDirectory(Path.Combine(runDirectory, "logs"));
 
@@ -141,6 +139,8 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
                 EventsDone = status.EventsDone,
                 ProgressPercent = status.ProgressPercent,
                 EstimatedRemainingSec = status.EstimatedRemainingSec,
+                CurrentThreadId = status.CurrentThreadId,
+                CurrentThreadTitle = status.CurrentThreadTitle,
                 CreatedAt = request.CreatedAt,
                 UpdatedAt = status.UpdatedAt,
                 ElapsedWallSec = DisplayFormatters.CalculateElapsedSeconds(status.StartedAt, status.CompletedAt, status.UpdatedAt),
@@ -150,6 +150,44 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
 
         return rows
             .OrderByDescending(static item => item.CreatedAt)
+            .ToList();
+    }
+
+    public async Task<CurrentArtifactDocument?> GetCurrentArtifactAsync(CancellationToken cancellationToken = default)
+    {
+        return await ReadJsonAsync<CurrentArtifactDocument>(
+            Path.Combine(paths.OutputsRoot, "current.json"),
+            cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<RefreshHistoryDocument>> GetRefreshHistoryAsync(
+        int maxRows,
+        CancellationToken cancellationToken = default)
+    {
+        var path = Path.Combine(paths.OutputsRoot, "refresh-history.jsonl");
+        if (!File.Exists(path) || maxRows <= 0)
+        {
+            return [];
+        }
+
+        var rows = new List<RefreshHistoryDocument>();
+        foreach (var line in await File.ReadAllLinesAsync(path, cancellationToken))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var row = JsonSerializer.Deserialize<RefreshHistoryDocument>(line, _jsonOptions);
+            if (row is not null)
+            {
+                rows.Add(row);
+            }
+        }
+
+        return rows
+            .OrderByDescending(static item => item.CompletedAt)
+            .Take(maxRows)
             .ToList();
     }
 
@@ -165,6 +203,12 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
         var status = await ReadJsonAsync<JobStatusDocument>(Path.Combine(runDirectory, "status.json"), cancellationToken);
         var result = await ReadJsonAsync<JobResultDocument>(Path.Combine(runDirectory, "result.json"), cancellationToken);
         var manifest = await ReadJsonAsync<ManifestDocument>(Path.Combine(runDirectory, "manifest.json"), cancellationToken);
+        var fidelityReport = await ReadJsonAsync<FidelityReportDocument>(
+            Path.Combine(runDirectory, "fidelity_report.json"),
+            cancellationToken);
+        var updateManifest = await ReadJsonAsync<UpdateManifestDocument>(
+            Path.Combine(runDirectory, "update_manifest.json"),
+            cancellationToken);
         if (request is null || status is null || result is null)
         {
             return null;
@@ -205,6 +249,10 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
             Result = result,
             ManifestItems = manifest?.Items ?? [],
             TimelineItems = timelineItems.OrderBy(static item => item.PreferredTitle, StringComparer.CurrentCultureIgnoreCase).ToList(),
+            ArtifactPreviews = await BuildArtifactPreviewsAsync(runDirectory, cancellationToken),
+            FidelityReport = fidelityReport,
+            UpdateManifest = updateManifest,
+            WorkerLogLines = await ReadLastLinesAsync(Path.Combine(runDirectory, "logs", "worker.log"), 80, cancellationToken),
             ArchivePath = Path.Combine(runDirectory, "export", "TimelineForWindowsCodex-export.zip"),
             ElapsedWallSec = DisplayFormatters.CalculateElapsedSeconds(status.StartedAt, status.CompletedAt, status.UpdatedAt),
         };
@@ -256,5 +304,62 @@ public sealed class RunStore(AppPaths paths, CodexDiscoveryService discoveryServ
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var json = JsonSerializer.Serialize(payload, _jsonOptions);
         await File.WriteAllTextAsync(path, json, cancellationToken);
+    }
+
+    private static async Task<List<ArtifactPreviewDocument>> BuildArtifactPreviewsAsync(
+        string runDirectory,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new (string Label, string Path)[]
+        {
+            ("readme.html", Path.Combine(runDirectory, "readme.html")),
+            ("threads/index.md", Path.Combine(runDirectory, "threads", "index.md")),
+            ("fidelity_report.md", Path.Combine(runDirectory, "fidelity_report.md")),
+            ("update_manifest.json", Path.Combine(runDirectory, "update_manifest.json")),
+            ("environment/ledger.md", Path.Combine(runDirectory, "environment", "ledger.md")),
+        };
+
+        var previews = new List<ArtifactPreviewDocument>();
+        foreach (var candidate in candidates)
+        {
+            if (!File.Exists(candidate.Path))
+            {
+                continue;
+            }
+
+            previews.Add(new ArtifactPreviewDocument
+            {
+                Label = candidate.Label,
+                Path = candidate.Path,
+                Preview = await ReadTextPreviewAsync(candidate.Path, 60, cancellationToken),
+            });
+        }
+
+        return previews;
+    }
+
+    private static async Task<string> ReadTextPreviewAsync(
+        string path,
+        int maxLines,
+        CancellationToken cancellationToken)
+    {
+        var lines = await File.ReadAllLinesAsync(path, cancellationToken);
+        return string.Join(Environment.NewLine, lines.Take(maxLines));
+    }
+
+    private static async Task<List<string>> ReadLastLinesAsync(
+        string path,
+        int maxLines,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path) || maxLines <= 0)
+        {
+            return [];
+        }
+
+        var lines = await File.ReadAllLinesAsync(path, cancellationToken);
+        return lines
+            .TakeLast(maxLines)
+            .ToList();
     }
 }

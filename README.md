@@ -1,29 +1,38 @@
 # TimelineForWindowsCodex
 
-`TimelineForWindowsCodex` turns local Codex Desktop history on Windows into timeline-oriented markdown, JSON, and ZIP handoff packages.
+`TimelineForWindowsCodex` turns local Codex Desktop history on Windows into thread history markdown, environment ledger artifacts, and ZIP export packages.
+The web app is positioned as a local inspection console: it shows what was captured, what is missing, how reliable the current artifact is, and what can be downloaded.
 
-As of 2026-04-06 Asia/Tokyo, the repository is at an MVP scaffold stage with a working end-to-end vertical slice.
+As of 2026-04-22 Asia/Tokyo, the repository is at an MVP scaffold stage with a working end-to-end vertical slice.
 
 ## Current scope
 
 - `web`: ASP.NET Core Razor Pages
 - `worker`: Python daemon
-- `single_thread` first
+- `cli`: discover / create-job / run / list-jobs / show-job
+- `single_thread`, `multi_thread`, `all_threads`
 
 ## Current UI
 
-- `jobs/new`
-  - select a Codex source root
-  - discover available threads
-  - choose date filters and redaction profile
-- `jobs`
-  - list recent runs
-  - inspect progress and download ZIP outputs
-- `jobs/{id}`
+- `/`
+  - inspect the current artifact
+  - review coverage, warnings, and refresh history
+  - jump to the latest ZIP and export details
+- `/threads`
+  - review discovered threads
+  - filter and select threads
+  - export the selected range
+- `/environment`
+  - inspect source roots, defaults, source types, warnings, and limitations
+- `/exports`
+  - review current artifact status
+  - inspect active refreshes
+  - browse export history and download ZIP outputs
+- `/exports/{id}`
   - view request metadata
-  - inspect generated timelines
+  - inspect generated timelines, fidelity, and update summary
   - download the generated ZIP package
-- `settings`
+- `/settings`
   - set default source roots
   - set default language and processing flags
 
@@ -47,17 +56,29 @@ Primary source types currently supported:
 Current source strategy:
 
 - prefer session JSONL when present
-- use `state_5.sqlite` to improve discovery and fallback metadata
+- use `state_5.sqlite` only to improve discovery and fallback metadata
 - use archived `thread_reads` when session JSONL is missing or when archived source import is enabled
+- use `thread_name` / `thread.name` as the thread-name source when available
 
-## Current outputs
+## Current exported bundle
 
 - per-thread timeline markdown
-- combined `events.jsonl`
-- per-thread and combined `segments.json`
-- LLM handoff markdown
-- LLM handoff JSON
+- thread-local system notes inside each thread markdown
+- thread index markdown
+- export `readme.html`
+- environment ledger markdown
+- environment observations JSONL
+- environment ledger JSON
 - ZIP export bundle
+
+Current output emphasis:
+
+- preserve the raw user / assistant message chain as markdown
+- use `threads/<thread_id>.md` as the exported file naming rule
+- keep thread-local observed thread-name points in the thread file
+- include user-side mode and attachment file names when the source exposes them
+- separate cross-thread environment changes into `environment/*`
+- keep the bundle easy to hand to another LLM with `readme.html` as the entry point
 
 ## Development
 
@@ -87,6 +108,38 @@ The app mounts these source roots read-only inside the containers:
 If you run Compose from PowerShell or `cmd.exe`, use Windows-style values in `.env`.
 If you run Compose from WSL, use `/mnt/c/...` style values in `.env`.
 
+## CLI
+
+The worker supports a local CLI path with the same basic lifecycle as the web flow, even though the public web UI is framed around sync / inspect / export instead of job management.
+
+Examples:
+
+```bash
+PYTHONPATH=/mnt/c/apps/TimelineForWindowsCodex/worker/src \
+python3 -m timeline_for_windows_codex_worker discover \
+  --primary-root /mnt/c/Users/amano/.codex \
+  --include-archived-sources
+```
+
+```bash
+PYTHONPATH=/mnt/c/apps/TimelineForWindowsCodex/worker/src \
+python3 -m timeline_for_windows_codex_worker run \
+  --primary-root /mnt/c/Users/amano/.codex \
+  --thread-id 11111111-2222-3333-4444-555555555555 \
+  --format json
+```
+
+```bash
+PYTHONPATH=/mnt/c/apps/TimelineForWindowsCodex/worker/src \
+python3 -m timeline_for_windows_codex_worker list-jobs --format json
+```
+
+Notes:
+
+- omit `--thread-id` to run all discovered threads
+- pass `--thread-id` multiple times for a multi-thread export
+- CLI defaults are loaded from `runtime.defaults.json` when available
+
 ## Current local verification
 
 Verified on this machine:
@@ -95,17 +148,26 @@ Verified on this machine:
 - thread discovery from `C:\Users\amano\.codex`
 - thread discovery fallback from `state_5.sqlite`
 - archived `thread_reads` import
-- timeline / handoff / ZIP generation
+- thread history / environment ledger / ZIP generation
 - ja / en UI switching
+- bilingual export guidance in `readme.html`, `threads/index.md`, and timeline headers
+- thread selection UX on `/threads` with filter + select-all helpers
 - worker integration test against a fixed fixture Codex home
 - HTTP smoke path for:
   - session JSONL source
   - `state_5.sqlite` + archived `thread_reads` source
-  - `jobs/new -> create -> process -> details -> ZIP download`
-
-Not fully verified in this environment:
-
-- `docker compose up` end-to-end, because Docker Desktop daemon was not running during the latest verification pass on `2026-04-06` Asia/Tokyo
+  - `/threads -> export -> /exports/{id} -> ZIP download`
+- `docker compose up --build -d` with real local Codex data on `2026-04-22` Asia/Tokyo
+- Docker Compose runs for:
+  - single thread
+  - 3 selected threads
+  - all discovered threads
+- worker CLI verification for:
+  - thread discovery from current + archived fixtures
+  - single-thread export
+  - multi-thread export
+  - all-thread export
+  - `list-jobs` and `show-job`
 
 ## Current MVP boundary
 
@@ -113,17 +175,24 @@ Included:
 
 - thread discovery from `session_index.jsonl`, `state_5.sqlite`, session JSONL files, and archived `thread_reads`
 - run creation from selected thread ids
+- CLI parity for thread discovery, selection, execution, and job inspection
 - basic worker rendering for one or more threads, including archived `thread_reads`
+- thread history markdown focused on raw user / assistant message chains
+- `threads/<thread_id>.md` export naming
+- observed thread-name points from `session_index.jsonl` and archived `thread_reads`
+- thread selection helpers for large thread lists in the web UI
+- cross-thread environment ledger for custom instructions, model profiles, and client runtime observations
+- ZIP bundle centered on `threads/*` and `environment/*`
 - ZIP export
 
 Deferred:
 
 - richer `thread/read` item coverage beyond message / reasoning / plan / compaction
 - rich file-edit extraction
-- advanced segmenting
-- full artifact auto-linking
+- confirmed thread rename events beyond point-in-time name observations
+- exact custom-instruction save timestamps beyond first observation in selected threads
+- full artifact auto-linking and binary attachment export
 - broader state database enrichment beyond thread catalog fallback
-- Docker Compose end-to-end verification on a live daemon
 
 ## Testing
 
@@ -132,6 +201,16 @@ Worker integration:
 ```bash
 PYTHONPATH=/mnt/c/apps/TimelineForWindowsCodex/worker/src \
 python3 -m unittest discover -s /mnt/c/apps/TimelineForWindowsCodex/worker/tests -v
+```
+
+CLI examples:
+
+```bash
+PYTHONPATH=/mnt/c/apps/TimelineForWindowsCodex/worker/src \
+python3 -m timeline_for_windows_codex_worker discover --format json
+
+PYTHONPATH=/mnt/c/apps/TimelineForWindowsCodex/worker/src \
+python3 -m timeline_for_windows_codex_worker run --format json
 ```
 
 Web smoke:
@@ -151,5 +230,5 @@ Notes:
 
 - expand archived `thread_reads` parsing beyond the currently supported item types
 - derive richer file-edit and terminal events
-- improve segment grouping so timelines are shorter and more readable
-- validate the same flow through Docker Compose
+- tighten what should be exported for non-text attachments
+- polish CLI text output for long thread lists and larger job inventories

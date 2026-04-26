@@ -5,10 +5,28 @@ from typing import Any
 
 
 @dataclass
+class ObservedThreadName:
+    name: str
+    observed_at: str | None = None
+    source: str = ""
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ObservedThreadName":
+        return cls(
+            name=str(payload.get("name") or ""),
+            observed_at=payload.get("observed_at"),
+            source=str(payload.get("source") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ThreadSelection:
     thread_id: str
     preferred_title: str
-    title_history: list[str] = field(default_factory=list)
+    observed_thread_names: list[ObservedThreadName] = field(default_factory=list)
     source_root_path: str = ""
     source_root_kind: str = ""
     session_path: str = ""
@@ -18,10 +36,20 @@ class ThreadSelection:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ThreadSelection":
+        observations_payload = payload.get("observed_thread_names") or []
+        title_history = payload.get("title_history") or []
         return cls(
             thread_id=str(payload.get("thread_id") or ""),
             preferred_title=str(payload.get("preferred_title") or ""),
-            title_history=list(payload.get("title_history") or []),
+            observed_thread_names=[
+                ObservedThreadName.from_dict(item)
+                for item in observations_payload
+                if isinstance(item, dict)
+            ] or [
+                ObservedThreadName(name=str(item or ""))
+                for item in title_history
+                if str(item or "").strip()
+            ],
             source_root_path=str(payload.get("source_root_path") or ""),
             source_root_kind=str(payload.get("source_root_kind") or ""),
             session_path=str(payload.get("session_path") or ""),
@@ -31,7 +59,9 @@ class ThreadSelection:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["observed_thread_names"] = [item.to_dict() for item in self.observed_thread_names]
+        return payload
 
 
 @dataclass

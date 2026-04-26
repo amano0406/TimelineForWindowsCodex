@@ -105,13 +105,49 @@
                 }
                 else
                 {
-                    <p class="text-sm text-slate-600">@string.Format(System.Globalization.CultureInfo.CurrentCulture, L("jobs.new.discovered_count"), Model.DiscoveredThreads.Count)</p>
-                    <div class="selection-list-shell">
+                    <div class="space-y-4" data-thread-selection-root>
+                        <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                            <div class="space-y-1">
+                                <p class="text-sm text-slate-600">@string.Format(System.Globalization.CultureInfo.CurrentCulture, L("jobs.new.discovered_count"), Model.DiscoveredThreads.Count)</p>
+                                <p class="text-xs text-slate-500">@L("jobs.new.default_selection_note")</p>
+                                <p class="text-sm font-medium text-slate-900">
+                                    <span data-selected-count>@Model.SelectedThreadIds.Count</span>
+                                    /
+                                    <span data-total-count>@Model.DiscoveredThreads.Count</span>
+                                    @L("jobs.new.selected_summary_suffix")
+                                    <span class="text-slate-500">(<span data-visible-count>@Model.DiscoveredThreads.Count</span> @L("jobs.new.visible_summary_suffix"))</span>
+                                </p>
+                            </div>
+                            <div class="flex flex-col gap-2 xl:items-end">
+                                <input
+                                    type="search"
+                                    class="app-input xl:min-w-[22rem]"
+                                    placeholder="@L("jobs.new.filter_placeholder")"
+                                    aria-label="@L("jobs.new.filter_placeholder")"
+                                    data-thread-filter />
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" class="btn-secondary" data-select-action="all">@L("jobs.new.select_all")</button>
+                                    <button type="button" class="btn-secondary" data-select-action="visible">@L("jobs.new.select_visible")</button>
+                                    <button type="button" class="btn-secondary" data-select-action="none">@L("jobs.new.clear_selection")</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="selection-list-shell">
                         <ul class="space-y-3">
                             @foreach (var thread in Model.DiscoveredThreads)
                             {
                                 var isChecked = Model.SelectedThreadIds.Any(id => string.Equals(id, thread.ThreadId, StringComparison.OrdinalIgnoreCase));
-                                <li class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                var searchText = string.Join(
+                                    " ",
+                                    new[]
+                                    {
+                                        thread.PreferredTitle,
+                                        thread.ThreadId,
+                                        thread.Cwd,
+                                        thread.FirstUserMessageExcerpt,
+                                        thread.SourceRootKind,
+                                    }.Where(static value => !string.IsNullOrWhiteSpace(value)));
+                                <li class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-thread-entry data-search="@searchText">
                                     <label class="flex gap-4">
                                         <input type="checkbox" name="SelectedThreadIds" value="@thread.ThreadId" checked="@isChecked" class="mt-1" />
                                         <div class="min-w-0 flex-1">
@@ -140,8 +176,77 @@
                             }
                         </ul>
                     </div>
+                    </div>
                 }
             </section>
         </div>
     </form>
 </section>
+
+@section Scripts
+{
+    <script>
+        (() => {
+            const root = document.querySelector("[data-thread-selection-root]");
+            if (!root) {
+                return;
+            }
+
+            const filterInput = root.querySelector("[data-thread-filter]");
+            const selectedCount = root.querySelector("[data-selected-count]");
+            const visibleCount = root.querySelector("[data-visible-count]");
+            const entries = Array.from(root.querySelectorAll("[data-thread-entry]"));
+
+            const getCheckboxes = () =>
+                entries
+                    .map((entry) => entry.querySelector('input[type="checkbox"]'))
+                    .filter((checkbox) => checkbox);
+
+            const updateCounts = () => {
+                const checkboxes = getCheckboxes();
+                selectedCount.textContent = String(checkboxes.filter((checkbox) => checkbox.checked).length);
+                visibleCount.textContent = String(entries.filter((entry) => !entry.hidden).length);
+            };
+
+            const normalize = (value) => (value || "").toLocaleLowerCase();
+
+            const applyFilter = () => {
+                const query = normalize(filterInput.value.trim());
+                for (const entry of entries) {
+                    const haystack = normalize(entry.dataset.search || "");
+                    entry.hidden = query.length > 0 && !haystack.includes(query);
+                }
+                updateCounts();
+            };
+
+            for (const checkbox of getCheckboxes()) {
+                checkbox.addEventListener("change", updateCounts);
+            }
+
+            filterInput.addEventListener("input", applyFilter);
+
+            for (const button of root.querySelectorAll("[data-select-action]")) {
+                button.addEventListener("click", () => {
+                    const action = button.dataset.selectAction;
+                    for (const entry of entries) {
+                        const checkbox = entry.querySelector('input[type="checkbox"]');
+                        if (!checkbox) {
+                            continue;
+                        }
+
+                        if (action === "all") {
+                            checkbox.checked = true;
+                        } else if (action === "none") {
+                            checkbox.checked = false;
+                        } else if (action === "visible" && !entry.hidden) {
+                            checkbox.checked = true;
+                        }
+                    }
+                    updateCounts();
+                });
+            }
+
+            updateCounts();
+        })();
+    </script>
+}

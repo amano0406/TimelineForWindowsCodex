@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
 from .contracts import JobRequest, JobResult, JobStatus, ManifestThreadItem
-from .fs_utils import now_iso, read_json, write_json_atomic
+from .fs_utils import ensure_dir, now_iso, read_json, write_json_atomic, write_text
 
 
 def request_path(job_dir: Path) -> Path:
@@ -21,6 +22,62 @@ def result_path(job_dir: Path) -> Path:
 
 def manifest_path(job_dir: Path) -> Path:
     return job_dir / "manifest.json"
+
+
+def create_job_id(outputs_root: Path) -> str:
+    ensure_dir(outputs_root)
+    while True:
+        candidate = f"run-{now_iso().replace(':', '').replace('-', '')[:15]}-{uuid4().hex}"[:32]
+        if not (outputs_root / candidate).exists():
+            return candidate
+
+
+def create_job(job_dir: Path, request: JobRequest) -> None:
+    ensure_dir(job_dir)
+    ensure_dir(job_dir / "threads")
+    ensure_dir(job_dir / "environment")
+    ensure_dir(job_dir / "export")
+    ensure_dir(job_dir / "logs")
+
+    write_json_atomic(request_path(job_dir), request.to_dict())
+    write_status(
+        job_dir,
+        JobStatus(
+            job_id=request.job_id,
+            state="pending",
+            current_stage="queued",
+            message="Waiting for worker pickup.",
+            threads_total=len(request.selected_threads),
+            threads_done=0,
+            events_total=0,
+            events_done=0,
+            progress_percent=0.0,
+        ),
+    )
+    write_result(job_dir, JobResult(job_id=request.job_id, state="pending"))
+    write_manifest(
+        job_dir,
+        request.job_id,
+        [
+            ManifestThreadItem(
+                thread_id=thread.thread_id,
+                preferred_title=thread.preferred_title,
+                session_path=thread.session_path,
+                source_root_path=thread.source_root_path,
+                status="pending",
+                event_count=0,
+            )
+            for thread in request.selected_threads
+        ],
+    )
+    write_text(
+        job_dir / "README.md",
+        "# TimelineForWindowsCodex run\n\nThis directory is the source of truth for one timeline run.\n",
+    )
+    write_text(
+        job_dir / "NOTICE.md",
+        "Sensitive data may exist in raw source material. Exported outputs should use redacted views.\n",
+    )
 
 
 def load_request(job_dir: Path) -> JobRequest:
