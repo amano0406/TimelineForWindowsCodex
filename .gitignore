@@ -16,6 +16,3 @@ worker/.venv/
 app-data/
 outputs/
 .tmp/
-
-web/obj/
-web/bin/
