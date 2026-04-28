@@ -8,6 +8,11 @@
 - Web UI は製品責務から外す。
 - source transcript data は削除・上書き・大量移動しない。
 - export contract は維持する。
+- 通常運用は固定 settings と `refresh` を主導線にする。
+- 複数入力ディレクトリと固定出力先を settings で管理する。
+- 通常実行は Docker Compose 経由に限定する。
+- Windows 利用者向けの正面玄関は PowerShell とする。
+- WSL は自動テスト・開発検証用の裏口として残す。
 
 ## A. プロダクトの使命
 
@@ -59,11 +64,30 @@
 
 ## G. 実行面
 
-- [x] CLI で `discover / create-job / run / list-jobs / show-job / process-job / daemon` を持っている
+- [x] CLI で `discover / create-job / run / refresh / settings / list-jobs / show-job / process-job / daemon` を持っている
+- [x] CLI で最新成果物を確認する `current` を持っている
+- [x] CLI で最新ZIPを指定先へコピーする `export-current` を持っている
+- [x] CLI で refresh から ZIP コピーまで行う `handoff` を持っている
 - [x] CLI で thread id 指定なしなら全 thread 対象にできる
 - [x] CLI で thread id を複数指定できる
 - [x] Docker Compose は worker daemon のみを起動する
 - [x] Web UI 実装を削除済み
+- [x] 複数 source root を settings に保存できる
+- [x] output root を settings に保存できる
+- [x] repo root の `settings.example.json` を Git 管理している
+- [x] repo root の `settings.json` を Git 管理外にしている
+- [x] host-side 開発検証時の既定 settings path を repo root `settings.json` にしている
+- [x] Docker Compose では `TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH` で永続 volume 側の settings を使える
+- [x] ホスト上の直接 CLI 実行を通常運用では停止できる
+- [x] 自動テストだけ `TIMELINE_FOR_WINDOWS_CODEX_ALLOW_HOST_RUN=1` でホスト実行を許可できる
+- [x] Docker の ENTRYPOINT / CMD を CLI コマンド指定しやすい形にしている
+- [x] PowerShell wrapper から Docker Compose 経由で CLI を実行できる
+- [x] WSL / host shell は自動テスト・開発検証用の裏口として扱う方針を明記している
+- [x] `settings init` で通常設定を初期化できる
+- [x] `refresh` で settings の source root / output root を使える
+- [x] `settings validate` で source root と output root の状態を確認できる
+- [x] 変化していない thread は前回成果物を再利用できる
+- [x] ZIP ファイル名に run id 由来の日時情報を含められる
 
 ## H. 出力内容の説明責任
 
@@ -71,6 +95,7 @@
 - [x] export `readme.html` 上で「既知の欠損・未収録」を説明している
 - [x] run ごとの missing source や fidelity gap を明示する専用レポートを生成できる
 - [x] `catalog.json` と `update_manifest.json` を生成できる
+- [x] `processing_profile.json` で重い thread を確認できる
 - [x] `current.json` と `refresh-history.jsonl` を更新できる
 
 ## I. 動作確認
@@ -79,6 +104,14 @@
 - [x] CLI `discover` の fixture 確認がある
 - [x] CLI `run` の単一 / 複数 / 全 thread export 確認がある
 - [x] CLI `list-jobs` / `show-job` 確認がある
+- [x] CLI `settings` / `refresh` の fixture 確認がある
+- [x] CLI `settings init` / `current` / `export-current` の fixture 確認がある
+- [x] CLI `handoff` の fixture 確認がある
+- [x] CLI `settings show` / `refresh --help` の実行確認がある
+- [x] CLI `settings validate` の fixture 確認がある
+- [x] PowerShell wrapper の `help` / `settings show` 実行確認がある
+- [x] 本物の `.codex` を一時出力先で読む production-like smoke test がある
+- [x] Docker Compose 経由で本物の `.codex` を一時出力先で読む production-like smoke test がある
 - [x] ZIP に `readme.html`, `threads/index.md`, `threads/<thread_id>.md`, `environment/*`, `fidelity_report.*` が入ることを確認している
 
 ## J. まだ未実装の大枠項目

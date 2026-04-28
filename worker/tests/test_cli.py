@@ -18,6 +18,7 @@ if str(WORKER_SRC) not in sys.path:
 
 from timeline_for_windows_codex_worker.cli import main  # noqa: E402
 from timeline_for_windows_codex_worker.fs_utils import read_json  # noqa: E402
+from timeline_for_windows_codex_worker.settings import load_runtime_paths  # noqa: E402
 
 
 FIXTURE_CODEX_HOME = REPO_ROOT / "tests" / "fixtures" / "codex-home-min"
@@ -28,6 +29,27 @@ ARCHIVED_THREAD_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 class WorkerCliTests(unittest.TestCase):
     maxDiff = None
+
+    def test_host_direct_execution_is_blocked_without_explicit_test_allow(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "timeline_for_windows_codex_worker.cli.Path.exists",
+            return_value=False,
+        ):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = main(["settings", "show"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Host direct execution is disabled", stderr.getvalue())
+        self.assertIn("docker compose run --rm worker", stderr.getvalue())
+
+    def test_runtime_paths_default_settings_path_is_repo_root(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            runtime = load_runtime_paths()
+
+        self.assertEqual(runtime.settings_path, (REPO_ROOT / "settings.json").resolve())
 
     def test_discover_cli_returns_current_and_archived_threads(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -102,6 +124,191 @@ class WorkerCliTests(unittest.TestCase):
             self.assertIn("environment/ledger.json", names)
             self.assertEqual(zipped_status["state"], "completed")
             self.assertEqual(zipped_result["state"], "completed")
+            self.assertIn("TimelineForWindowsCodex-export-run-", archive_path.name)
+
+    def test_settings_refresh_uses_configured_sources_and_output_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            appdata_root = temp_root / "appdata"
+            outputs_root = temp_root / "configured-outputs"
+
+            settings_stdout, _stderr, settings_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "settings",
+                "add-source",
+                str(FIXTURE_CODEX_HOME),
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(settings_exit_code, 0)
+            settings_payload = json.loads(settings_stdout)
+            self.assertEqual(settings_payload["source_roots"], [str(FIXTURE_CODEX_HOME.resolve())])
+            self.assertEqual(settings_payload["settings_path"], str((appdata_root / "settings.json").resolve()))
+            self.assertTrue((appdata_root / "settings.json").exists())
+
+            output_stdout, _stderr, output_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "settings",
+                "set-output",
+                str(outputs_root),
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(output_exit_code, 0)
+            output_payload = json.loads(output_stdout)
+            self.assertEqual(output_payload["outputs_root"], str(outputs_root.resolve()))
+
+            validate_stdout, _stderr, validate_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "settings",
+                "validate",
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(validate_exit_code, 0)
+            validate_payload = json.loads(validate_stdout)
+            self.assertTrue(validate_payload["ok"])
+            self.assertEqual(validate_payload["source_roots"][0]["path"], str(FIXTURE_CODEX_HOME.resolve()))
+            self.assertTrue(validate_payload["source_roots"][0]["readable"])
+            self.assertTrue(validate_payload["outputs_root"]["ready"])
+
+            first_stdout, _stderr, first_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "refresh",
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(first_exit_code, 0)
+            first_payload = json.loads(first_stdout)
+            self.assertTrue(Path(first_payload["archive_path"]).exists())
+            self.assertTrue(str(first_payload["run_directory"]).startswith(str(outputs_root.resolve())))
+            self.assertEqual(first_payload["processing_mode"], "full_rebuild")
+            self.assertEqual(first_payload["rendered_thread_count"], 1)
+            self.assertEqual(first_payload["update_counts"]["new"], 1)
+            self.assertEqual(len(first_payload["slowest_threads"]), 1)
+
+            second_stdout, _stderr, second_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "refresh",
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(second_exit_code, 0)
+            second_payload = json.loads(second_stdout)
+            self.assertTrue(Path(second_payload["archive_path"]).exists())
+            self.assertEqual(second_payload["processing_mode"], "incremental_reuse")
+            self.assertEqual(second_payload["reused_thread_count"], 1)
+            self.assertEqual(second_payload["update_counts"]["unchanged"], 1)
+
+    def test_settings_init_current_and_export_current(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            appdata_root = temp_root / "appdata"
+            outputs_root = temp_root / "configured-outputs"
+            export_root = temp_root / "exported"
+
+            init_stdout, _stderr, init_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "settings",
+                "init",
+                "--source-root",
+                str(FIXTURE_CODEX_HOME),
+                "--output-root",
+                str(outputs_root),
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(init_exit_code, 0)
+            init_payload = json.loads(init_stdout)
+            self.assertEqual(init_payload["source_roots"], [str(FIXTURE_CODEX_HOME.resolve())])
+            self.assertEqual(init_payload["outputs_root"], str(outputs_root.resolve()))
+
+            refresh_stdout, _stderr, refresh_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "refresh",
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(refresh_exit_code, 0)
+            refresh_payload = json.loads(refresh_stdout)
+
+            current_stdout, _stderr, current_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "current",
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(current_exit_code, 0)
+            current_payload = json.loads(current_stdout)
+            self.assertEqual(current_payload["job_id"], refresh_payload["refresh_id"])
+            self.assertTrue(current_payload["archive_exists"])
+            self.assertGreater(current_payload["archive_size_bytes"], 0)
+
+            export_stdout, _stderr, export_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "export-current",
+                "--to",
+                str(export_root),
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(export_exit_code, 0)
+            export_payload = json.loads(export_stdout)
+            destination_path = Path(export_payload["destination_path"])
+            self.assertTrue(destination_path.exists())
+            self.assertEqual(destination_path.name, Path(refresh_payload["archive_path"]).name)
+
+            _stdout, overwrite_stderr, overwrite_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "export-current",
+                "--to",
+                str(export_root),
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(overwrite_exit_code, 1)
+            self.assertIn("--overwrite", overwrite_stderr)
+
+            overwrite_stdout, _stderr, final_export_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "export-current",
+                "--to",
+                str(export_root),
+                "--overwrite",
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(final_export_exit_code, 0)
+            overwrite_payload = json.loads(overwrite_stdout)
+            self.assertEqual(overwrite_payload["destination_path"], str(destination_path))
+
+            handoff_root = temp_root / "handoff"
+            handoff_stdout, _stderr, handoff_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "handoff",
+                "--to",
+                str(handoff_root),
+                "--format",
+                "json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(handoff_exit_code, 0)
+            handoff_payload = json.loads(handoff_stdout)
+            self.assertEqual(handoff_payload["state"], "completed")
+            self.assertEqual(handoff_payload["refresh"]["state"], "completed")
+            self.assertEqual(handoff_payload["export"]["state"], "completed")
+            self.assertTrue(Path(handoff_payload["export"]["destination_path"]).exists())
 
     def test_run_list_and_show_cli_support_single_and_multiple_thread_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -181,12 +388,25 @@ class WorkerCliTests(unittest.TestCase):
             show_ids = {row["thread_id"] for row in show_payload["selected_threads"]}
             self.assertEqual(show_ids, {FIXTURE_THREAD_ID, ARCHIVED_THREAD_ID})
 
-    def _invoke_cli(self, outputs_root: Path, *argv: str) -> tuple[str, str, int]:
+    def _invoke_cli(
+        self,
+        outputs_root: Path,
+        *argv: str,
+        appdata_root: Path | None = None,
+        settings_path: Path | None = None,
+    ) -> tuple[str, str, int]:
         stdout = io.StringIO()
         stderr = io.StringIO()
         env = {
+            "TIMELINE_FOR_WINDOWS_CODEX_ALLOW_HOST_RUN": "1",
             "TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT": str(outputs_root),
         }
+        if appdata_root is not None:
+            env["TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT"] = str(appdata_root)
+            if settings_path is None:
+                settings_path = appdata_root / "settings.json"
+        if settings_path is not None:
+            env["TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH"] = str(settings_path)
         with patch.dict(os.environ, env, clear=False):
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 exit_code = main(list(argv))

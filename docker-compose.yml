@@ -6,8 +6,10 @@ services:
       context: .
       dockerfile: docker/worker.Dockerfile
     environment:
+      TIMELINE_FOR_WINDOWS_CODEX_RUNTIME: docker
       TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json
       TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT: /shared/app-data
+      TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH: /shared/app-data/settings.json
       TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT: /shared/outputs
     volumes:
       - app-data:/shared/app-data

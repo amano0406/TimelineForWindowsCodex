@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 import traceback
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -80,6 +81,7 @@ def process_job(job_dir: Path) -> None:
         threads_root = ensure_dir(job_dir / "threads")
         total_threads = max(1, len(request.selected_threads))
         for index, thread in enumerate(request.selected_threads, start=1):
+            thread_started = time.perf_counter()
             resolved_session_path = resolve_thread_session_path(thread)
             if resolved_session_path is not None:
                 thread.session_path = str(resolved_session_path)
@@ -156,6 +158,7 @@ def process_job(job_dir: Path) -> None:
                 rendered_thread_count += 1
                 append_log(log_path, f"Processed {thread.thread_id} events={len(events)}")
 
+            processing_duration_ms = round((time.perf_counter() - thread_started) * 1000.0, 3)
             timeline_fingerprint = _file_fingerprint(timeline_path)
             if source_fingerprint is not None:
                 source_catalog_by_path[str(source_fingerprint["path"])] = source_fingerprint
@@ -184,6 +187,8 @@ def process_job(job_dir: Path) -> None:
                 "source_type": _source_type_from_path(resolved_session_path),
                 "cwd": thread.cwd,
                 "updated_at": thread.updated_at,
+                "cache_status": "reused" if reused else "rendered",
+                "processing_duration_ms": processing_duration_ms,
                 "observed_thread_name_count": len(thread.observed_thread_names),
                 "has_mode": any(str(entry.get("mode") or "").strip() for entry in transcript_entries),
                 "attachment_count": sum(
@@ -212,8 +217,14 @@ def process_job(job_dir: Path) -> None:
                     "render_contract_version": RENDER_CONTRACT_VERSION,
                     "cache_key": thread_cache_key,
                     "cache_status": "reused" if reused else "rendered",
+                    "processing_duration_ms": processing_duration_ms,
                     "cache_artifacts": _thread_cache_artifact_paths(thread_dir),
                 }
+            )
+            append_log(
+                log_path,
+                f"Thread {thread.thread_id} cache_status={'reused' if reused else 'rendered'} "
+                f"duration_ms={processing_duration_ms}",
             )
 
             for observation in thread_environment_observations:
@@ -256,12 +267,14 @@ def process_job(job_dir: Path) -> None:
             list(source_catalog_by_path.values()),
             thread_catalog_rows,
         )
+        processing_profile = build_processing_profile(request.job_id, thread_catalog_rows)
         update_manifest = build_update_manifest(
             request.job_id,
             run_catalog,
             previous_catalog,
         )
         write_json_atomic(job_dir / "catalog.json", run_catalog)
+        write_json_atomic(job_dir / "processing_profile.json", processing_profile)
         write_json_atomic(job_dir / "update_manifest.json", update_manifest)
 
         _assign_export_names(thread_rows)
@@ -373,6 +386,7 @@ def build_run_archive(job_dir: Path, thread_rows: list[dict[str, object]]) -> Pa
         _write_if_exists(archive, job_dir / "fidelity_report.md", "fidelity_report.md")
         _write_if_exists(archive, job_dir / "fidelity_report.json", "fidelity_report.json")
         _write_if_exists(archive, job_dir / "catalog.json", "catalog.json")
+        _write_if_exists(archive, job_dir / "processing_profile.json", "processing_profile.json")
         _write_if_exists(archive, job_dir / "update_manifest.json", "update_manifest.json")
         _write_if_exists(archive, job_dir / "manifest.json", "manifest.json")
         _write_if_exists(archive, job_dir / "status.json", "status.json")
@@ -391,7 +405,7 @@ def build_run_archive(job_dir: Path, thread_rows: list[dict[str, object]]) -> Pa
 
 
 def run_archive_path(job_dir: Path) -> Path:
-    return job_dir / "export" / "TimelineForWindowsCodex-export.zip"
+    return job_dir / "export" / f"TimelineForWindowsCodex-export-{job_dir.name}.zip"
 
 
 def write_current_artifact_pointer(
@@ -418,6 +432,7 @@ def write_current_artifact_pointer(
             "archive_path": str(archive_path),
             "readme_path": str(job_dir / "readme.html"),
             "catalog_path": str(job_dir / "catalog.json"),
+            "processing_profile_path": str(job_dir / "processing_profile.json"),
             "update_manifest_path": str(job_dir / "update_manifest.json"),
             "fidelity_report_path": str(job_dir / "fidelity_report.json"),
             "thread_count": thread_count,
@@ -609,6 +624,44 @@ def build_run_catalog(
     }
 
 
+def build_processing_profile(
+    job_id: str,
+    thread_rows: list[dict[str, object]],
+) -> dict[str, object]:
+    durations = [
+        float(row.get("processing_duration_ms") or 0.0)
+        for row in thread_rows
+    ]
+    rendered_count = sum(1 for row in thread_rows if str(row.get("cache_status") or "") == "rendered")
+    reused_count = sum(1 for row in thread_rows if str(row.get("cache_status") or "") == "reused")
+    slowest_threads = sorted(
+        [
+            {
+                "thread_id": str(row.get("thread_id") or ""),
+                "preferred_title": str(row.get("preferred_title") or ""),
+                "cache_status": str(row.get("cache_status") or ""),
+                "event_count": int(row.get("event_count") or 0),
+                "message_count": int(row.get("message_count") or 0),
+                "processing_duration_ms": float(row.get("processing_duration_ms") or 0.0),
+            }
+            for row in thread_rows
+        ],
+        key=lambda item: item["processing_duration_ms"],
+        reverse=True,
+    )[:10]
+    return {
+        "schema_version": 1,
+        "job_id": job_id,
+        "generated_at": now_iso(),
+        "thread_count": len(thread_rows),
+        "rendered_thread_count": rendered_count,
+        "reused_thread_count": reused_count,
+        "total_processing_duration_ms": round(sum(durations), 3),
+        "max_processing_duration_ms": round(max(durations), 3) if durations else 0.0,
+        "slowest_threads": slowest_threads,
+    }
+
+
 def load_previous_catalog(job_dir: Path) -> dict[str, object] | None:
     current_pointer_path = job_dir.parent / "current.json"
     if not current_pointer_path.exists():
@@ -672,6 +725,7 @@ def build_update_manifest(
                 "status": status,
                 "source_type": str(current.get("source_type") or ""),
                 "cache_status": str(current.get("cache_status") or ""),
+                "processing_duration_ms": float(current.get("processing_duration_ms") or 0.0),
                 "message_count": int(current.get("message_count") or 0),
                 "event_count": int(current.get("event_count") or 0),
                 "previous_message_count": int(previous.get("message_count") or 0) if previous is not None else 0,
@@ -690,6 +744,7 @@ def build_update_manifest(
                 "source_type": str(previous.get("source_type") or ""),
                 "message_count": 0,
                 "event_count": 0,
+                "processing_duration_ms": 0.0,
                 "previous_message_count": int(previous.get("message_count") or 0),
                 "previous_event_count": int(previous.get("event_count") or 0),
             }

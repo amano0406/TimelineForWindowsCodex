@@ -12,6 +12,7 @@ __pycache__/
 .venv/
 worker/.venv/
 .env
+settings.json
 
 app-data/
 outputs/

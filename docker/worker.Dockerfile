@@ -12,5 +12,6 @@ RUN pip install --no-cache-dir -e /app/worker
 COPY configs/ /app/config/
 
 ENV PYTHONPATH=/app/worker/src
-ENTRYPOINT ["python", "-m", "timeline_for_windows_codex_worker", "daemon", "--poll-interval", "5"]
-
+ENV TIMELINE_FOR_WINDOWS_CODEX_RUNTIME=docker
+ENTRYPOINT ["python", "-m", "timeline_for_windows_codex_worker"]
+CMD ["daemon", "--poll-interval", "5"]
