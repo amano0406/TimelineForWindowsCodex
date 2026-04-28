@@ -280,7 +280,7 @@ def process_job(job_dir: Path) -> None:
         status.progress_percent = 96.0
         write_status(job_dir, status)
 
-        archive_path = build_run_archive(job_dir, thread_rows)
+        archive_path = run_archive_path(job_dir)
 
         result = JobResult(
             job_id=request.job_id,
@@ -301,6 +301,9 @@ def process_job(job_dir: Path) -> None:
         status.completed_at = now_iso()
         write_status(job_dir, status)
         write_manifest(job_dir, request.job_id, manifest_items)
+
+        build_run_archive(job_dir, thread_rows)
+
         write_current_artifact_pointer(
             job_dir=job_dir,
             job_id=request.job_id,
@@ -360,8 +363,8 @@ def process_job(job_dir: Path) -> None:
 
 
 def build_run_archive(job_dir: Path, thread_rows: list[dict[str, object]]) -> Path:
-    export_root = ensure_dir(job_dir / "export")
-    archive_path = export_root / "TimelineForWindowsCodex-export.zip"
+    archive_path = run_archive_path(job_dir)
+    ensure_dir(archive_path.parent)
 
     with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as archive:
         _write_if_exists(archive, job_dir / "readme.html", "readme.html")
@@ -385,6 +388,10 @@ def build_run_archive(job_dir: Path, thread_rows: list[dict[str, object]]) -> Pa
             _write_if_exists(archive, timeline_path, f"threads/{archive_name}")
 
     return archive_path
+
+
+def run_archive_path(job_dir: Path) -> Path:
+    return job_dir / "export" / "TimelineForWindowsCodex-export.zip"
 
 
 def write_current_artifact_pointer(

@@ -94,9 +94,14 @@ class WorkerCliTests(unittest.TestCase):
 
             with ZipFile(archive_path) as archive:
                 names = set(archive.namelist())
+                zipped_status = json.loads(archive.read("status.json").decode("utf-8"))
+                zipped_result = json.loads(archive.read("result.json").decode("utf-8"))
 
             self.assertIn(f"threads/{FIXTURE_THREAD_ID}.md", names)
             self.assertIn(f"threads/{ARCHIVED_THREAD_ID}.md", names)
+            self.assertIn("environment/ledger.json", names)
+            self.assertEqual(zipped_status["state"], "completed")
+            self.assertEqual(zipped_result["state"], "completed")
 
     def test_run_list_and_show_cli_support_single_and_multiple_thread_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -119,8 +124,13 @@ class WorkerCliTests(unittest.TestCase):
             single_payload = json.loads(single_stdout)
             with ZipFile(single_payload["archive_path"]) as archive:
                 names = set(archive.namelist())
+                zipped_status = json.loads(archive.read("status.json").decode("utf-8"))
+                zipped_result = json.loads(archive.read("result.json").decode("utf-8"))
             self.assertIn(f"threads/{FIXTURE_THREAD_ID}.md", names)
             self.assertNotIn(f"threads/{ARCHIVED_THREAD_ID}.md", names)
+            self.assertIn("environment/ledger.json", names)
+            self.assertEqual(zipped_status["state"], "completed")
+            self.assertEqual(zipped_result["state"], "completed")
 
             multi_stdout, _stderr, multi_exit_code = self._invoke_cli(
                 outputs_root,
@@ -141,8 +151,13 @@ class WorkerCliTests(unittest.TestCase):
             multi_payload = json.loads(multi_stdout)
             with ZipFile(multi_payload["archive_path"]) as archive:
                 names = set(archive.namelist())
+                zipped_status = json.loads(archive.read("status.json").decode("utf-8"))
+                zipped_result = json.loads(archive.read("result.json").decode("utf-8"))
             self.assertIn(f"threads/{FIXTURE_THREAD_ID}.md", names)
             self.assertIn(f"threads/{ARCHIVED_THREAD_ID}.md", names)
+            self.assertIn("environment/ledger.json", names)
+            self.assertEqual(zipped_status["state"], "completed")
+            self.assertEqual(zipped_result["state"], "completed")
 
             list_stdout, _stderr, list_exit_code = self._invoke_cli(
                 outputs_root,

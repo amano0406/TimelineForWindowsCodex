@@ -11,7 +11,7 @@ services:
       TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT: /shared/app-data
       TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT: /shared/outputs
     ports:
-      - "${HOST_WEB_PORT:-19400}:8080"
+      - "${HOST_WEB_BIND:-127.0.0.1}:${HOST_WEB_PORT:-19400}:8080"
     volumes:
       - app-data:/shared/app-data
       - outputs:/shared/outputs

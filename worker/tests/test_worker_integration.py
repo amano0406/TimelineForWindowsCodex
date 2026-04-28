@@ -107,6 +107,9 @@ class ProcessJobIntegrationTests(unittest.TestCase):
             self.assertTrue(archive_path.exists())
             with ZipFile(archive_path) as archive:
                 names = set(archive.namelist())
+                zipped_status = json.loads(archive.read("status.json").decode("utf-8"))
+                zipped_result = json.loads(archive.read("result.json").decode("utf-8"))
+
             self.assertIn("readme.html", names)
             self.assertIn("environment/observations.jsonl", names)
             self.assertIn("environment/ledger.json", names)
@@ -114,6 +117,11 @@ class ProcessJobIntegrationTests(unittest.TestCase):
             self.assertIn("catalog.json", names)
             self.assertIn("update_manifest.json", names)
             self.assertIn(f"threads/{FIXTURE_THREAD_ID}.md", names)
+
+            self.assertEqual(zipped_status["state"], "completed")
+            self.assertEqual(zipped_status["current_stage"], "completed")
+            self.assertEqual(zipped_result["state"], "completed")
+            self.assertEqual(zipped_result["archive_path"], str(archive_path))
 
     def test_process_job_honors_date_filters(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

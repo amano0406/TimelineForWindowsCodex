@@ -80,6 +80,49 @@ Current output emphasis:
 - separate cross-thread environment changes into `environment/*`
 - keep the bundle easy to hand to another LLM with `readme.html` as the entry point
 
+## Current output layout
+
+The current MVP writes one run directory directly under the configured outputs root:
+
+```text
+<outputs-root>/
+  <run-id>/
+    request.json
+    status.json
+    result.json
+    manifest.json
+    fidelity_report.json
+    fidelity_report.md
+    catalog.json
+    update_manifest.json
+    logs/
+    environment/
+    threads/
+    export/TimelineForWindowsCodex-export.zip
+  current.json
+  refresh-history.jsonl
+```
+
+The shared Timeline baseline is:
+
+```text
+data/output/runs/
+  timeline-for-windows-codex/
+    <job-id>/
+      job.json
+      input_snapshot.json
+      run_001/
+        run.json
+        status.json
+        manifest.json
+        result.json
+        fidelity_report.json
+        logs/
+        artifacts/
+```
+
+The current implementation has not migrated to that shared layout. Keep this as a known contract gap unless a migration or compatibility layer is explicitly approved.
+
 ## Development
 
 1. Copy `.env.example` to `.env` and adjust the host paths.
@@ -97,6 +140,7 @@ Default host variables:
 - `HOST_CODEX_HOME`
 - `HOST_CODEX_BACKUP_HOME`
 - `HOST_CODEX_ROOT`
+- `HOST_WEB_BIND` (defaults to `127.0.0.1`)
 - `HOST_WEB_PORT`
 
 The app mounts these source roots read-only inside the containers:
