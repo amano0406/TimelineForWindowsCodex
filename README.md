@@ -130,20 +130,6 @@ cp .env.example .env
 
 Source mounts are read-only. `settings.json` is mounted into the container as `/shared/app-data/settings.json` and survives container rebuilds because it lives in the repo root.
 
-Stop Docker resources:
-
-```powershell
-.\stop.ps1
-```
-
-Uninstall Docker resources:
-
-```powershell
-.\uninstall.ps1
-```
-
-The uninstall script does not delete Codex source history, `outputs`, or `downloads`. It asks separately before deleting the app-data Docker volume or local `settings.json`.
-
 ## Testing
 
 Unit tests:

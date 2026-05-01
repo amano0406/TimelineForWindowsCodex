@@ -129,20 +129,6 @@ cp .env.example .env
 
 source mount は read-only です。`settings.json` は container 内の `/shared/app-data/settings.json` に mount されます。
 
-Docker resource を停止:
-
-```powershell
-.\stop.ps1
-```
-
-Docker resource をアンインストール:
-
-```powershell
-.\uninstall.ps1
-```
-
-アンインストールスクリプトは、Codex source 履歴、`outputs`、`downloads` は削除しません。app-data Docker volume や local `settings.json` を削除する前には別途確認します。
-
 ## テスト
 
 Unit test:
