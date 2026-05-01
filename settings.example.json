@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "source_roots": [
-    "/mnt/c/Users/amano/.codex",
-    "/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home"
+    "/input/codex-home",
+    "/input/codex-backup"
   ],
-  "outputs_root": "/mnt/c/Codex/archive/TimelineForWindowsCodex/outputs",
+  "outputs_root": "/shared/outputs",
   "redaction_profile": "strict",
   "include_archived_sources": true,
   "include_tool_outputs": false,

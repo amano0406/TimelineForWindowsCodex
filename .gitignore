@@ -16,4 +16,6 @@ settings.json
 
 app-data/
 outputs/
+downloads/
 .tmp/
+.docker/

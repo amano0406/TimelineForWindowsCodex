@@ -21,6 +21,7 @@ CONTAINER_SETTINGS_DIR = PurePosixPath("/smoke/settings")
 CONTAINER_APPDATA_DIR = PurePosixPath("/smoke/appdata")
 CONTAINER_OUTPUT_DIR = PurePosixPath("/smoke/output")
 CONTAINER_IGNORED_OUTPUTS_DIR = PurePosixPath("/smoke/ignored")
+CONTAINER_DOWNLOAD_DIR = PurePosixPath("/smoke/downloads")
 REQUIRED_ZIP_ENTRIES = {
     "README.md",
 }
@@ -60,7 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     appdata_dir = temp_root / "appdata"
     output_dir = temp_root / "output"
     ignored_outputs_dir = temp_root / "ignored"
-    for directory in (settings_dir, appdata_dir, output_dir, ignored_outputs_dir):
+    download_dir = temp_root / "downloads"
+    for directory in (settings_dir, appdata_dir, output_dir, ignored_outputs_dir, download_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -79,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                 appdata_dir=appdata_dir,
                 output_dir=output_dir,
                 ignored_outputs_dir=ignored_outputs_dir,
+                download_dir=download_dir,
                 source_mounts=source_mounts,
             )
 
@@ -95,22 +98,30 @@ def main(argv: list[str] | None = None) -> int:
             appdata_dir=appdata_dir,
             output_dir=output_dir,
             ignored_outputs_dir=ignored_outputs_dir,
+            download_dir=download_dir,
             source_mounts=source_mounts,
         )
 
         refresh_payloads: list[dict[str, Any]] = []
         inspections: list[dict[str, Any]] = []
-        for _ in range(runs):
+        for index in range(runs):
             refresh_payload = _run_compose_json(
-                ["items", "refresh", "--json"],
+                [
+                    "items",
+                    "refresh",
+                    "--download-to",
+                    str(CONTAINER_DOWNLOAD_DIR / f"download-{index + 1}"),
+                    "--json",
+                ],
                 settings_dir=settings_dir,
                 appdata_dir=appdata_dir,
                 output_dir=output_dir,
                 ignored_outputs_dir=ignored_outputs_dir,
+                download_dir=download_dir,
                 source_mounts=source_mounts,
             )
             refresh_payloads.append(refresh_payload)
-            inspections.append(_inspect_refresh(refresh_payload, output_dir))
+            inspections.append(_inspect_refresh(refresh_payload, output_dir, download_dir))
         _assert_valid(refresh_payloads, inspections)
 
         summary = {
@@ -157,6 +168,7 @@ def _run_compose_json(
     appdata_dir: Path,
     output_dir: Path,
     ignored_outputs_dir: Path,
+    download_dir: Path,
     source_mounts: list[SourceMount],
 ) -> dict[str, Any]:
     compose_command = [
@@ -179,6 +191,8 @@ def _run_compose_json(
         f"{output_dir}:{CONTAINER_OUTPUT_DIR}",
         "-v",
         f"{ignored_outputs_dir}:{CONTAINER_IGNORED_OUTPUTS_DIR}",
+        "-v",
+        f"{download_dir}:{CONTAINER_DOWNLOAD_DIR}",
     ]
     for source_mount in source_mounts:
         compose_command.extend(["-v", f"{source_mount.host_path}:{source_mount.container_path}:ro"])
@@ -206,15 +220,12 @@ def _run_compose_json(
     return json.loads(completed.stdout)
 
 
-def _inspect_refresh(payload: dict[str, Any], output_dir: Path) -> dict[str, Any]:
-    run_dir = _container_output_path_to_host(str(payload.get("run_directory") or ""), output_dir)
-    archive_path = _container_output_path_to_host(str(payload.get("archive_path") or ""), output_dir)
-    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
-    update_manifest = json.loads((run_dir / "update_manifest.json").read_text(encoding="utf-8"))
-    current = json.loads((run_dir.parent / "current.json").read_text(encoding="utf-8"))
-    fidelity = json.loads((run_dir / "fidelity_report.json").read_text(encoding="utf-8"))
-    processing_profile = json.loads((run_dir / "processing_profile.json").read_text(encoding="utf-8"))
+def _inspect_refresh(payload: dict[str, Any], output_dir: Path, download_dir: Path) -> dict[str, Any]:
+    master_root = _container_output_path_to_host(str(payload.get("master_root") or ""), output_dir)
+    download = payload.get("download") if isinstance(payload.get("download"), dict) else {}
+    archive_path = _container_download_path_to_host(str(download.get("destination_path") or ""), download_dir)
+    master_thread_json_count = len(list(master_root.glob("*/thread.json")))
+    master_convert_info_count = len(list(master_root.glob("*/convert_info.json")))
 
     with ZipFile(archive_path) as archive:
         names = set(archive.namelist())
@@ -225,27 +236,22 @@ def _inspect_refresh(payload: dict[str, Any], output_dir: Path) -> dict[str, Any
                 if name.endswith("/thread.json")
             ]
         )
-        convert_json_count = len([name for name in names if name.endswith("/convert.json")])
+        convert_json_count = len([name for name in names if name.endswith("/convert_info.json")])
         missing_zip_entries = sorted(REQUIRED_ZIP_ENTRIES - names)
 
     return {
         "refresh_id": payload.get("refresh_id"),
-        "run_directory_exists": run_dir.exists(),
+        "master_root_exists": master_root.exists(),
         "archive_exists": archive_path.exists(),
         "archive_name": archive_path.name,
-        "status_state": status.get("state"),
-        "result_state": result.get("state"),
         "thread_count": payload.get("thread_count"),
-        "event_count": payload.get("event_count"),
-        "update_counts": update_manifest.get("counts"),
-        "current_processing_mode": current.get("processing_mode"),
-        "current_run_id": current.get("job_id"),
-        "current_reused_thread_count": current.get("reused_thread_count"),
-        "current_rendered_thread_count": current.get("rendered_thread_count"),
-        "fidelity_thread_count": fidelity.get("thread_count"),
-        "fidelity_source_types": fidelity.get("source_types"),
-        "processing_profile_thread_count": processing_profile.get("thread_count"),
-        "slowest_thread_count": len(processing_profile.get("slowest_threads") or []),
+        "message_count": payload.get("message_count"),
+        "update_counts": payload.get("update_counts"),
+        "processing_mode": payload.get("processing_mode"),
+        "reused_thread_count": payload.get("reused_thread_count"),
+        "rendered_thread_count": payload.get("rendered_thread_count"),
+        "master_thread_json_count": master_thread_json_count,
+        "master_convert_info_count": master_convert_info_count,
         "missing_zip_entries": missing_zip_entries,
         "zip_thread_json_count": thread_json_count,
         "zip_convert_json_count": convert_json_count,
@@ -259,6 +265,13 @@ def _container_output_path_to_host(container_path: str, output_dir: Path) -> Pat
     return output_dir.joinpath(*relative_path.parts)
 
 
+def _container_download_path_to_host(container_path: str, download_dir: Path) -> Path:
+    if not container_path.startswith(str(CONTAINER_DOWNLOAD_DIR)):
+        raise ValueError(f"Unexpected container download path: {container_path}")
+    relative_path = PurePosixPath(container_path).relative_to(CONTAINER_DOWNLOAD_DIR)
+    return download_dir.joinpath(*relative_path.parts)
+
+
 def _assert_valid(
     refresh_payloads: list[dict[str, Any]],
     inspections: list[dict[str, Any]],
@@ -266,21 +279,18 @@ def _assert_valid(
     for payload, inspection in zip(refresh_payloads, inspections, strict=True):
         if payload.get("state") != "completed":
             raise AssertionError(f"Refresh did not complete: {payload}")
-        for key in ("status_state", "result_state"):
-            if inspection.get(key) != "completed":
-                raise AssertionError(f"{key} was not completed: {inspection}")
         if inspection.get("missing_zip_entries"):
             raise AssertionError(f"ZIP is missing required files: {inspection}")
         if int(inspection.get("thread_count") or 0) <= 0:
             raise AssertionError(f"No threads were exported: {inspection}")
+        if inspection.get("master_thread_json_count") != inspection.get("thread_count"):
+            raise AssertionError(f"Master thread JSON count mismatch: {inspection}")
+        if inspection.get("master_convert_info_count") != inspection.get("thread_count"):
+            raise AssertionError(f"Master convert_info JSON count mismatch: {inspection}")
         if inspection.get("zip_thread_json_count") != inspection.get("thread_count"):
             raise AssertionError(f"Thread JSON count mismatch: {inspection}")
         if inspection.get("zip_convert_json_count") != inspection.get("thread_count"):
             raise AssertionError(f"Convert JSON count mismatch: {inspection}")
-        if inspection.get("processing_profile_thread_count") != inspection.get("thread_count"):
-            raise AssertionError(f"Processing profile thread count mismatch: {inspection}")
-        if inspection.get("current_run_id") != payload.get("run_id"):
-            raise AssertionError(f"Current pointer does not match refresh: {inspection}")
 
     if len(inspections) >= 2:
         second_counts = inspections[1].get("update_counts") or {}

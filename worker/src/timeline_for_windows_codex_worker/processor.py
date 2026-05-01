@@ -2,481 +2,287 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import time
-import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from .contracts import JobRequest, JobResult, JobStatus, ManifestThreadItem, ThreadSelection
-from .fs_utils import append_jsonl, append_log, ensure_dir, now_iso, read_json, write_json_atomic, write_jsonl, write_text
-from .job_store import (
-    load_request,
-    load_status,
-    write_manifest,
-    write_result,
-    write_status,
-)
+from .contracts import RefreshRequest, ThreadSelection
+from .fs_utils import ensure_dir, now_iso, read_json, write_json_atomic
 from .parse_sessions import (
-    parse_thread_environment_observations,
-    parse_thread_events,
     parse_thread_transcript_entries,
     resolve_thread_session_path,
 )
 from .timeline import (
-    build_segments,
-    build_environment_ledger,
+    THREAD_CONVERT_FILE_NAME,
+    THREAD_FINAL_FILE_NAME,
     build_thread_convert_payload,
     build_thread_conversation_payload,
     export_thread_dir_name,
-    render_environment_ledger_md,
-    render_export_readme_md,
-    render_fidelity_report_md,
-    THREAD_CONVERT_FILE_NAME,
-    THREAD_FINAL_FILE_NAME,
-    RUN_INCLUDED_ITEMS,
-    RUN_LIMITATION_ITEMS,
 )
 
 PARSER_VERSION = 2
-RENDER_CONTRACT_VERSION = 2
-THREAD_CACHE_SCHEMA_VERSION = 1
-
-THREAD_CACHE_FILES = {
-    "convert": "convert.json",
-    "thread": "thread.json",
-    "events": "events.json",
-    "transcript_entries": "transcript_entries.json",
-    "environment_observations": "environment_observations.json",
-    "segments": "segments.json",
-    "cache": "cache.json",
-}
+RENDER_CONTRACT_VERSION = 3
+THREAD_CACHE_SCHEMA_VERSION = 2
 
 
-def process_job(job_dir: Path) -> None:
-    request = load_request(job_dir)
-    status = load_status(job_dir)
-    log_path = job_dir / "logs" / "worker.log"
+def process_refresh(request: RefreshRequest, outputs_root: Path) -> dict[str, object]:
+    """Refresh the fixed master artifact root.
 
-    status.job_id = request.job_id
-    status.state = "running"
-    status.current_stage = "parsing"
-    status.message = "Worker picked up the run."
-    status.started_at = status.started_at or now_iso()
-    status.threads_total = len(request.selected_threads)
-    write_status(job_dir, status)
-    append_log(log_path, f"Starting {request.job_id}")
+    The master root is intentionally not a run database. It only stores the
+    latest normalized item artifacts under <master>/<thread_id>/.
+    """
 
-    try:
-        thread_rows: list[dict[str, object]] = []
-        thread_catalog_rows: list[dict[str, object]] = []
-        source_catalog_by_path: dict[str, dict[str, object]] = {}
-        manifest_items: list[ManifestThreadItem] = []
-        environment_observations: list[dict[str, object]] = []
-        total_event_count = 0
-        total_segment_count = 0
-        reused_thread_count = 0
-        rendered_thread_count = 0
-        previous_catalog = load_previous_catalog(job_dir)
-        previous_threads = _catalog_threads_by_id(previous_catalog)
+    ensure_dir(outputs_root)
+    started = time.perf_counter()
+    completed_at = now_iso()
+    rows: list[dict[str, object]] = []
+    update_counts = {
+        "new": 0,
+        "changed": 0,
+        "unchanged": 0,
+        "missing": 0,
+        "degraded": 0,
+    }
+    total_messages = 0
+    total_attachments = 0
+    reused_thread_count = 0
+    rendered_thread_count = 0
 
-        outputs_root = job_dir.parent
-        environment_root = ensure_dir(job_dir / "environment")
-        cache_threads_root = ensure_dir(job_dir / "cache" / "threads")
-        total_threads = max(1, len(request.selected_threads))
-        for index, thread in enumerate(request.selected_threads, start=1):
-            thread_started = time.perf_counter()
-            resolved_session_path = resolve_thread_session_path(thread)
-            if resolved_session_path is not None:
-                thread.session_path = str(resolved_session_path)
-            source_fingerprint = _file_fingerprint(resolved_session_path)
-            thread_cache_key = build_thread_cache_key(request, thread, source_fingerprint)
-            source_type = _source_type_from_path(resolved_session_path)
-            export_thread_dir = export_thread_dir_name(thread.thread_id)
-
-            status.current_thread_id = thread.thread_id
-            status.current_thread_title = thread.preferred_title
-            thread_dir = ensure_dir(cache_threads_root / thread.thread_id)
-            master_thread_dir = ensure_dir(outputs_root / export_thread_dir)
-            convert_path = master_thread_dir / THREAD_CONVERT_FILE_NAME
-            thread_path = master_thread_dir / THREAD_FINAL_FILE_NAME
-            previous_thread = previous_threads.get(thread.thread_id)
-            reused = try_reuse_thread_cache(previous_thread, thread_cache_key, thread_dir)
-            if reused:
-                status.current_stage = "reusing"
-                status.message = f"Reusing {thread.preferred_title or thread.thread_id}"
-                write_status(job_dir, status)
-                events = _read_json_list(thread_dir / THREAD_CACHE_FILES["events"])
-                transcript_entries = _read_json_list(thread_dir / THREAD_CACHE_FILES["transcript_entries"])
-                thread_environment_observations = _read_json_list(
-                    thread_dir / THREAD_CACHE_FILES["environment_observations"]
-                )
-                segments = _read_json_list(thread_dir / THREAD_CACHE_FILES["segments"])
-                cached_convert_path = thread_dir / THREAD_CACHE_FILES["convert"]
-                cached_thread_path = thread_dir / THREAD_CACHE_FILES["thread"]
-                if cached_convert_path.exists():
-                    shutil.copy2(cached_convert_path, convert_path)
-                if cached_thread_path.exists():
-                    shutil.copy2(cached_thread_path, thread_path)
-                reused_thread_count += 1
-                append_log(log_path, f"Reused {thread.thread_id} events={len(events)}")
-            else:
-                status.current_stage = "parsing"
-                status.message = f"Parsing {thread.preferred_title or thread.thread_id}"
-                write_status(job_dir, status)
-
-                events = parse_thread_events(
-                    thread,
-                    include_tool_outputs=request.include_tool_outputs,
-                    redaction_profile=request.redaction_profile,
-                )
-                transcript_entries = parse_thread_transcript_entries(
-                    thread,
-                    redaction_profile=request.redaction_profile,
-                    include_compaction_recovery=request.include_compaction_recovery,
-                )
-                thread_environment_observations = parse_thread_environment_observations(thread)
-                if not thread.cwd:
-                    thread.cwd = next(
-                        (
-                            str(event.get("cwd") or "")
-                            for event in events
-                            if event.get("kind") == "session_meta" and event.get("cwd")
-                        ),
-                        thread.cwd,
-                    )
-                segments = build_segments(events)
-                limitations = _build_thread_limitations(
-                    resolved_session_path=resolved_session_path,
-                    transcript_entries=transcript_entries,
-                )
-
-                status.current_stage = "rendering"
-                status.message = f"Rendering {thread.preferred_title or thread.thread_id}"
-                write_status(job_dir, status)
-
-                conversation_payload = build_thread_conversation_payload(
-                    thread=thread,
-                    transcript_rows=transcript_entries,
-                    limitations=limitations,
-                )
-                convert_payload = build_thread_convert_payload(
-                    thread=thread,
-                    events=events,
-                    transcript_rows=transcript_entries,
-                    segments=segments,
-                    environment_observations=thread_environment_observations,
-                    source_fingerprint=source_fingerprint,
-                    source_type=source_type,
-                    limitations=limitations,
-                    cache_key=thread_cache_key,
-                    parser_version=PARSER_VERSION,
-                    render_contract_version=RENDER_CONTRACT_VERSION,
-                )
-                write_json_atomic(thread_path, conversation_payload)
-                write_json_atomic(convert_path, convert_payload)
-                write_thread_cache_artifacts(
-                    thread_dir=thread_dir,
-                    cache_key=thread_cache_key,
-                    source_fingerprint=source_fingerprint,
-                    convert_payload=convert_payload,
-                    thread_payload=conversation_payload,
-                    events=events,
-                    transcript_entries=transcript_entries,
-                    environment_observations=thread_environment_observations,
-                    segments=segments,
-                )
-                rendered_thread_count += 1
-                append_log(log_path, f"Processed {thread.thread_id} events={len(events)}")
-
-            processing_duration_ms = round((time.perf_counter() - thread_started) * 1000.0, 3)
-            convert_fingerprint = _file_fingerprint(convert_path)
-            thread_fingerprint = _file_fingerprint(thread_path)
-            if source_fingerprint is not None:
-                source_catalog_by_path[str(source_fingerprint["path"])] = source_fingerprint
-
-            manifest_items.append(
-                ManifestThreadItem(
-                    thread_id=thread.thread_id,
-                    preferred_title=thread.preferred_title,
-                    session_path=thread.session_path,
-                    source_root_path=thread.source_root_path,
-                    status="completed",
-                    event_count=len(events),
-                    thread_path=str(thread_path),
-                )
-            )
-
-            limitations = _build_thread_limitations(
-                resolved_session_path=resolved_session_path,
-                transcript_entries=transcript_entries,
-            )
-            thread_row = {
-                "thread_id": thread.thread_id,
-                "preferred_title": thread.preferred_title,
-                "convert_path": str(convert_path),
-                "thread_path": str(thread_path),
-                "export_thread_dir": export_thread_dir,
-                "event_count": len(events),
-                "message_count": len(transcript_entries),
-                "segment_count": len(segments),
-                "source_root_kind": thread.source_root_kind,
-                "resolved_session_path": str(resolved_session_path) if resolved_session_path is not None else "",
-                "source_type": source_type,
-                "cwd": thread.cwd,
-                "updated_at": thread.updated_at,
-                "cache_status": "reused" if reused else "rendered",
-                "processing_duration_ms": processing_duration_ms,
-                "observed_thread_name_count": len(thread.observed_thread_names),
-                "has_mode": any(str(entry.get("mode") or "").strip() for entry in transcript_entries),
-                "attachment_count": sum(
-                    len(entry.get("attachments") or [])
-                    for entry in transcript_entries
-                    if isinstance(entry.get("attachments"), list)
-                ),
-                "limitations": limitations,
-            }
-            thread_rows.append(thread_row)
-            thread_catalog_rows.append(
-                {
-                    "thread_id": thread.thread_id,
-                    "preferred_title": thread.preferred_title,
-                    "source_refs": [str(resolved_session_path)] if resolved_session_path is not None else [],
-                    "source_type": thread_row["source_type"],
-                    "source_root_kind": thread.source_root_kind,
-                    "message_count": len(transcript_entries),
-                    "event_count": len(events),
-                    "convert_path": str(convert_path),
-                    "convert_sha256": convert_fingerprint["sha256"] if convert_fingerprint is not None else "",
-                    "thread_path": str(thread_path),
-                    "thread_sha256": thread_fingerprint["sha256"] if thread_fingerprint is not None else "",
-                    "parser_version": PARSER_VERSION,
-                    "render_contract_version": RENDER_CONTRACT_VERSION,
-                    "cache_key": thread_cache_key,
-                    "cache_status": "reused" if reused else "rendered",
-                    "processing_duration_ms": processing_duration_ms,
-                    "cache_artifacts": _thread_cache_artifact_paths(thread_dir),
-                }
-            )
-            append_log(
-                log_path,
-                f"Thread {thread.thread_id} cache_status={'reused' if reused else 'rendered'} "
-                f"duration_ms={processing_duration_ms}",
-            )
-
-            for observation in thread_environment_observations:
-                environment_observations.append(observation)
-            total_event_count += len(events)
-            total_segment_count += len(segments)
-
-            status.threads_done = index
-            status.events_done = total_event_count
-            status.events_total = total_event_count
-            status.progress_percent = round((index / total_threads) * 92.0, 1)
-            write_status(job_dir, status)
-            write_manifest(job_dir, request.job_id, manifest_items)
-
-        environment_observations = sorted(
-            environment_observations,
-            key=lambda item: (
-                str(item.get("timestamp") or ""),
-                str(item.get("thread_id") or ""),
-                str(item.get("kind") or ""),
-                str(item.get("fingerprint") or ""),
-            ),
+    for thread in request.selected_threads:
+        thread_started = time.perf_counter()
+        row = refresh_thread_item(
+            request=request,
+            thread=thread,
+            outputs_root=outputs_root,
+            converted_at=completed_at,
         )
-        environment_ledger = build_environment_ledger(environment_observations)
-        write_jsonl(environment_root / "observations.jsonl", environment_observations)
-        write_json_atomic(environment_root / "ledger.json", environment_ledger)
-        write_text(
-            environment_root / "ledger.md",
-            render_environment_ledger_md(request.job_id, environment_ledger),
-        )
+        row["processing_duration_ms"] = round((time.perf_counter() - thread_started) * 1000.0, 3)
+        rows.append(row)
 
-        fidelity_report = build_fidelity_report(request.job_id, thread_rows)
-        write_json_atomic(job_dir / "fidelity_report.json", fidelity_report)
-        write_text(
-            job_dir / "fidelity_report.md",
-            render_fidelity_report_md(request.job_id, fidelity_report),
-        )
-        run_catalog = build_run_catalog(
-            request.job_id,
-            list(source_catalog_by_path.values()),
-            thread_catalog_rows,
-        )
-        processing_profile = build_processing_profile(request.job_id, thread_catalog_rows)
-        update_manifest = build_update_manifest(
-            request.job_id,
-            run_catalog,
-            previous_catalog,
-        )
-        write_json_atomic(job_dir / "catalog.json", run_catalog)
-        write_json_atomic(job_dir / "processing_profile.json", processing_profile)
-        write_json_atomic(job_dir / "update_manifest.json", update_manifest)
+        status = str(row.get("update_status") or "changed")
+        if status not in update_counts:
+            status = "changed"
+        update_counts[status] += 1
+        if row.get("cache_status") == "unchanged":
+            reused_thread_count += 1
+        else:
+            rendered_thread_count += 1
+        total_messages += int(row.get("message_count") or 0)
+        total_attachments += int(row.get("attachment_count") or 0)
 
-        readme_path = job_dir / "README.md"
-        generated_at = now_iso()
-        write_text(
-            readme_path,
-            render_export_readme_md(
-                request.job_id,
-                generated_at=generated_at,
-                thread_rows=thread_rows,
-            ),
-        )
-
-        status.current_stage = "archiving"
-        status.message = "Building ZIP archive."
-        status.progress_percent = 96.0
-        write_status(job_dir, status)
-
-        archive_path = run_archive_path(job_dir)
-
-        result = JobResult(
-            job_id=request.job_id,
-            state="completed",
-            thread_count=len(thread_rows),
-            event_count=total_event_count,
-            segment_count=total_segment_count,
-            archive_path=str(archive_path),
-            warnings=status.warnings,
-        )
-        write_result(job_dir, result)
-
-        status.state = "completed"
-        status.current_stage = "completed"
-        status.message = "Run completed."
-        status.progress_percent = 100.0
-        status.completed_at = now_iso()
-        write_status(job_dir, status)
-        write_manifest(job_dir, request.job_id, manifest_items)
-
-        build_run_archive(job_dir, thread_rows)
-
-        write_current_artifact_pointer(
-            job_dir=job_dir,
-            job_id=request.job_id,
-            archive_path=archive_path,
-            thread_count=len(thread_rows),
-            event_count=total_event_count,
-            reused_thread_count=reused_thread_count,
-            rendered_thread_count=rendered_thread_count,
-            completed_at=status.completed_at,
-        )
-        append_refresh_history(
-            job_dir=job_dir,
-            row={
-                "schema_version": 1,
-                "refresh_id": request.job_id,
-                "job_id": request.job_id,
-                "state": "completed",
-                "processing_mode": processing_mode_for_run(reused_thread_count),
-                "thread_count": len(thread_rows),
-                "event_count": total_event_count,
-                "reused_thread_count": reused_thread_count,
-                "rendered_thread_count": rendered_thread_count,
-                "archive_path": str(archive_path),
-                "completed_at": status.completed_at,
-            },
-        )
-        append_log(log_path, f"Completed {request.job_id}")
-    except Exception as exc:  # pragma: no cover - exercised by manual runs first
-        append_log(log_path, f"Failed {request.job_id}: {exc}")
-        append_log(log_path, traceback.format_exc())
-        status.state = "failed"
-        status.current_stage = "failed"
-        status.message = str(exc)
-        status.completed_at = now_iso()
-        write_status(job_dir, status)
-        write_result(
-            job_dir,
-            JobResult(
-                job_id=request.job_id,
-                state="failed",
-                warnings=[str(exc)],
-            ),
-        )
-        append_refresh_history(
-            job_dir=job_dir,
-            row={
-                "schema_version": 1,
-                "refresh_id": request.job_id,
-                "job_id": request.job_id,
-                "state": "failed",
-                "processing_mode": "failed_refresh",
-                "error": str(exc),
-                "completed_at": status.completed_at,
-            },
-        )
-        raise
+    return {
+        "schema_version": 1,
+        "refresh_id": request.refresh_id,
+        "state": "completed",
+        "master_root": str(outputs_root),
+        "completed_at": completed_at,
+        "thread_count": len(rows),
+        "item_count": len(rows),
+        "message_count": total_messages,
+        "attachment_count": total_attachments,
+        "reused_thread_count": reused_thread_count,
+        "rendered_thread_count": rendered_thread_count,
+        "processing_mode": "incremental_reuse" if reused_thread_count else "full_rebuild",
+        "update_counts": update_counts,
+        "processing_duration_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        "items": sorted(rows, key=lambda item: str(item.get("thread_id") or "")),
+    }
 
 
-def build_run_archive(job_dir: Path, thread_rows: list[dict[str, object]]) -> Path:
-    archive_path = run_archive_path(job_dir)
-    ensure_dir(archive_path.parent)
-
-    with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as archive:
-        _write_if_exists(archive, job_dir / "README.md", "README.md")
-
-        for row in thread_rows:
-            export_thread_dir = str(row["export_thread_dir"])
-            convert_path = Path(str(row["convert_path"]))
-            thread_path = Path(str(row["thread_path"]))
-            _write_if_exists(archive, convert_path, f"{export_thread_dir}/{THREAD_CONVERT_FILE_NAME}")
-            _write_if_exists(archive, thread_path, f"{export_thread_dir}/{THREAD_FINAL_FILE_NAME}")
-
-    return archive_path
-
-
-def run_archive_path(job_dir: Path) -> Path:
-    return job_dir / "export" / f"TimelineForWindowsCodex-export-{job_dir.name}.zip"
-
-
-def write_current_artifact_pointer(
+def refresh_thread_item(
     *,
-    job_dir: Path,
-    job_id: str,
-    archive_path: Path,
-    thread_count: int,
-    event_count: int,
-    reused_thread_count: int,
-    rendered_thread_count: int,
-    completed_at: str | None,
-) -> None:
-    outputs_root = job_dir.parent
-    write_json_atomic(
-        outputs_root / "current.json",
-        {
-            "schema_version": 1,
-            "job_id": job_id,
-            "state": "completed",
-            "processing_mode": processing_mode_for_run(reused_thread_count),
-            "updated_at": completed_at or now_iso(),
-            "run_directory": str(job_dir),
-            "archive_path": str(archive_path),
-            "readme_path": str(job_dir / "README.md"),
-            "catalog_path": str(job_dir / "catalog.json"),
-            "processing_profile_path": str(job_dir / "processing_profile.json"),
-            "update_manifest_path": str(job_dir / "update_manifest.json"),
-            "fidelity_report_path": str(job_dir / "fidelity_report.json"),
-            "thread_count": thread_count,
-            "event_count": event_count,
-            "reused_thread_count": reused_thread_count,
-            "rendered_thread_count": rendered_thread_count,
-        },
+    request: RefreshRequest,
+    thread: ThreadSelection,
+    outputs_root: Path,
+    converted_at: str,
+) -> dict[str, object]:
+    resolved_session_path = resolve_thread_session_path(thread)
+    if resolved_session_path is not None:
+        thread.session_path = str(resolved_session_path)
+
+    source_fingerprint = _file_fingerprint(resolved_session_path)
+    source_type = _source_type_from_path(resolved_session_path)
+    cache_key = build_thread_cache_key(request, thread, source_fingerprint)
+    export_thread_dir = export_thread_dir_name(thread.thread_id)
+    item_dir = ensure_dir(outputs_root / export_thread_dir)
+    thread_path = item_dir / THREAD_FINAL_FILE_NAME
+    convert_path = item_dir / THREAD_CONVERT_FILE_NAME
+    legacy_convert_path = item_dir / "convert.json"
+    existed_before = thread_path.exists() or convert_path.exists()
+
+    existing_convert = _read_optional_json(convert_path)
+    if (
+        _convert_cache_key(existing_convert) == cache_key
+        and thread_path.exists()
+        and convert_path.exists()
+    ):
+        thread_payload = read_json(thread_path)
+        return {
+            "thread_id": thread.thread_id,
+            "title": _payload_title(thread_payload, thread),
+            "update_status": "unchanged",
+            "cache_status": "unchanged",
+            "source_type": source_type,
+            "source_session_path": str(resolved_session_path) if resolved_session_path is not None else "",
+            "message_count": _message_count(existing_convert, thread_payload),
+            "attachment_count": _attachment_count(existing_convert, thread_payload),
+            "thread_path": str(thread_path),
+            "convert_info_path": str(convert_path),
+            "cache_key": cache_key,
+        }
+
+    transcript_entries = parse_thread_transcript_entries(
+        thread,
+        redaction_profile=request.redaction_profile,
+        include_compaction_recovery=request.include_compaction_recovery,
+    )
+    limitations = _build_thread_limitations(
+        resolved_session_path=resolved_session_path,
+        transcript_entries=transcript_entries,
+    )
+    thread_payload = build_thread_conversation_payload(
+        thread=thread,
+        transcript_rows=transcript_entries,
+        limitations=limitations,
+    )
+    convert_payload = build_thread_convert_payload(
+        thread=thread,
+        transcript_rows=transcript_entries,
+        source_fingerprint=source_fingerprint,
+        source_type=source_type,
+        limitations=limitations,
+        cache_key=cache_key,
+        parser_version=PARSER_VERSION,
+        render_contract_version=RENDER_CONTRACT_VERSION,
+    )
+    convert_payload["converted_at"] = converted_at
+    convert_payload["thread_path"] = str(thread_path)
+
+    write_json_atomic(thread_path, thread_payload)
+    write_json_atomic(convert_path, convert_payload)
+    if legacy_convert_path.exists() and legacy_convert_path != convert_path:
+        legacy_convert_path.unlink()
+
+    status = "changed" if existed_before else "new"
+    return {
+        "thread_id": thread.thread_id,
+        "title": _payload_title(thread_payload, thread),
+        "update_status": status,
+        "cache_status": "rendered",
+        "source_type": source_type,
+        "source_session_path": str(resolved_session_path) if resolved_session_path is not None else "",
+        "message_count": len(transcript_entries),
+        "attachment_count": _attachment_count(convert_payload, thread_payload),
+        "thread_path": str(thread_path),
+        "convert_info_path": str(convert_path),
+        "cache_key": cache_key,
+        "known_gaps": limitations,
+    }
+
+
+def build_download_archive(
+    outputs_root: Path,
+    destination_root: Path,
+    *,
+    overwrite: bool,
+    selected_item_ids: list[str] | None = None,
+) -> dict[str, object]:
+    rows = collect_master_items(outputs_root, selected_item_ids or [])
+    if not rows:
+        raise FileNotFoundError(f"No master items were found. Run items refresh first: {outputs_root}")
+
+    ensure_dir(destination_root)
+    archive_path = destination_root / f"TimelineForWindowsCodex-export-{_timestamp_for_filename()}.zip"
+    if archive_path.exists() and not overwrite:
+        raise ValueError(f"Destination already exists. Pass --overwrite to replace it: {archive_path}")
+
+    readme_text = render_download_readme(rows)
+    with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("README.md", readme_text)
+        for row in rows:
+            item_dir_name = str(row["item_dir_name"])
+            archive.write(Path(str(row["convert_info_path"])), f"items/{item_dir_name}/{THREAD_CONVERT_FILE_NAME}")
+            archive.write(Path(str(row["thread_path"])), f"items/{item_dir_name}/{THREAD_FINAL_FILE_NAME}")
+
+    return {
+        "schema_version": 1,
+        "state": "completed",
+        "destination_path": str(archive_path),
+        "master_root": str(outputs_root),
+        "thread_count": len(rows),
+        "item_count": len(rows),
+        "message_count": sum(int(row.get("message_count") or 0) for row in rows),
+        "attachment_count": sum(int(row.get("attachment_count") or 0) for row in rows),
+        "items": rows,
+    }
+
+
+def collect_master_items(outputs_root: Path, selected_item_ids: list[str] | None = None) -> list[dict[str, object]]:
+    if not outputs_root.exists():
+        return []
+
+    normalized_selection = {
+        value.strip().casefold()
+        for selected_id in selected_item_ids or []
+        for value in str(selected_id).split(",")
+        if value.strip()
+    }
+    rows: list[dict[str, object]] = []
+    for item_dir in sorted(path for path in outputs_root.iterdir() if path.is_dir()):
+        convert_path = item_dir / THREAD_CONVERT_FILE_NAME
+        thread_path = item_dir / THREAD_FINAL_FILE_NAME
+        if not convert_path.exists() or not thread_path.exists():
+            continue
+        payload = _read_optional_json(convert_path)
+        thread_id = str(payload.get("thread_id") or item_dir.name)
+        if normalized_selection and thread_id.casefold() not in normalized_selection and item_dir.name.casefold() not in normalized_selection:
+            continue
+        thread_payload = _read_optional_json(thread_path)
+        rows.append(
+            {
+                "thread_id": thread_id,
+                "item_dir_name": item_dir.name,
+                "title": _payload_title(thread_payload, ThreadSelection(thread_id=thread_id, preferred_title=thread_id)),
+                "message_count": _message_count(payload, thread_payload),
+                "attachment_count": _attachment_count(payload, thread_payload),
+                "convert_info_path": str(convert_path),
+                "thread_path": str(thread_path),
+            }
+        )
+
+    if normalized_selection:
+        found = {str(row["thread_id"]).casefold() for row in rows} | {str(row["item_dir_name"]).casefold() for row in rows}
+        missing = sorted(item for item in normalized_selection if item not in found)
+        if missing:
+            raise ValueError(f"Unknown item ids in master: {', '.join(missing)}")
+    return rows
+
+
+def render_download_readme(rows: list[dict[str, object]]) -> str:
+    message_count = sum(int(row.get("message_count") or 0) for row in rows)
+    return "\n".join(
+        [
+            "# TimelineForWindowsCodex Export",
+            "",
+            "This package was generated by TimelineForWindowsCodex.",
+            "",
+            "It contains normalized Windows Codex thread items converted from local Codex Desktop history.",
+            "",
+            f"- Item count: {len(rows)}",
+            f"- Message count: {message_count}",
+            "",
+            "## Layout",
+            "",
+            "- `items/<thread_id>/convert_info.json`: conversion metadata",
+            "- `items/<thread_id>/thread.json`: normalized user/assistant/system messages",
+            "",
+        ]
     )
 
 
-def append_refresh_history(*, job_dir: Path, row: dict[str, object]) -> None:
-    append_jsonl(job_dir.parent / "refresh-history.jsonl", row)
-
-
-def processing_mode_for_run(reused_thread_count: int) -> str:
-    return "incremental_reuse" if reused_thread_count > 0 else "full_rebuild"
-
-
 def build_thread_cache_key(
-    request: JobRequest,
+    request: RefreshRequest,
     thread: ThreadSelection,
     source_fingerprint: dict[str, object] | None,
 ) -> str:
@@ -485,17 +291,13 @@ def build_thread_cache_key(
         "parser_version": PARSER_VERSION,
         "render_contract_version": RENDER_CONTRACT_VERSION,
         "request": {
-            "include_tool_outputs": request.include_tool_outputs,
             "include_compaction_recovery": request.include_compaction_recovery,
             "redaction_profile": request.redaction_profile,
         },
         "thread": {
             "thread_id": thread.thread_id,
             "preferred_title": thread.preferred_title,
-            "observed_thread_names": [
-                item.to_dict()
-                for item in thread.observed_thread_names
-            ],
+            "observed_thread_names": [item.to_dict() for item in thread.observed_thread_names],
             "source_root_kind": thread.source_root_kind,
             "session_path": thread.session_path,
             "updated_at": thread.updated_at,
@@ -505,338 +307,6 @@ def build_thread_cache_key(
         "source": _source_fingerprint_for_cache(source_fingerprint),
     }
     return _stable_payload_sha256(payload)
-
-
-def try_reuse_thread_cache(
-    previous_thread: dict[str, object] | None,
-    cache_key: str,
-    thread_dir: Path,
-) -> bool:
-    if previous_thread is None or str(previous_thread.get("cache_key") or "") != cache_key:
-        return False
-
-    artifacts = previous_thread.get("cache_artifacts")
-    if not isinstance(artifacts, dict):
-        return False
-
-    source_paths: dict[str, Path] = {}
-    for key in THREAD_CACHE_FILES:
-        source_path = Path(str(artifacts.get(key) or ""))
-        if not source_path.exists() or not source_path.is_file():
-            return False
-        source_paths[key] = source_path
-
-    ensure_dir(thread_dir)
-    for key, filename in THREAD_CACHE_FILES.items():
-        shutil.copy2(source_paths[key], thread_dir / filename)
-
-    return True
-
-
-def write_thread_cache_artifacts(
-    *,
-    thread_dir: Path,
-    cache_key: str,
-    source_fingerprint: dict[str, object] | None,
-    convert_payload: dict[str, object],
-    thread_payload: dict[str, object],
-    events: list[dict[str, object]],
-    transcript_entries: list[dict[str, object]],
-    environment_observations: list[dict[str, object]],
-    segments: list[dict[str, object]],
-) -> None:
-    write_json_atomic(thread_dir / THREAD_CACHE_FILES["convert"], convert_payload)
-    write_json_atomic(thread_dir / THREAD_CACHE_FILES["thread"], thread_payload)
-    write_json_atomic(thread_dir / THREAD_CACHE_FILES["events"], events)
-    write_json_atomic(thread_dir / THREAD_CACHE_FILES["transcript_entries"], transcript_entries)
-    write_json_atomic(thread_dir / THREAD_CACHE_FILES["environment_observations"], environment_observations)
-    write_json_atomic(thread_dir / THREAD_CACHE_FILES["segments"], segments)
-    write_json_atomic(
-        thread_dir / THREAD_CACHE_FILES["cache"],
-        {
-            "schema_version": THREAD_CACHE_SCHEMA_VERSION,
-            "cache_key": cache_key,
-            "parser_version": PARSER_VERSION,
-            "render_contract_version": RENDER_CONTRACT_VERSION,
-            "source_fingerprint": source_fingerprint,
-        },
-    )
-
-
-def _thread_cache_artifact_paths(thread_dir: Path) -> dict[str, str]:
-    return {
-        key: str(thread_dir / filename)
-        for key, filename in THREAD_CACHE_FILES.items()
-    }
-
-
-def _read_json_list(path: Path) -> list[dict[str, object]]:
-    payload = read_json(path)
-    if not isinstance(payload, list):
-        return []
-    return [
-        item
-        for item in payload
-        if isinstance(item, dict)
-    ]
-
-
-def _write_if_exists(archive: ZipFile, path: Path, archive_name: str) -> None:
-    if path.exists():
-        archive.write(path, archive_name)
-
-
-def build_fidelity_report(job_id: str, thread_rows: list[dict[str, object]]) -> dict[str, object]:
-    source_types = sorted(
-        {
-            str(row.get("source_type") or "").strip()
-            for row in thread_rows
-            if str(row.get("source_type") or "").strip()
-        }
-    )
-    warnings = sorted(
-        {
-            limitation
-            for row in thread_rows
-            for limitation in (row.get("limitations") or [])
-            if isinstance(limitation, str) and limitation.startswith("Source file could not")
-        }
-    )
-    return {
-        "schema_version": 1,
-        "job_id": job_id,
-        "thread_count": len(thread_rows),
-        "source_types": source_types,
-        "included": list(RUN_INCLUDED_ITEMS),
-        "limitations": list(RUN_LIMITATION_ITEMS),
-        "warnings": warnings,
-        "threads": [
-            {
-                "thread_id": str(row.get("thread_id") or ""),
-                "preferred_title": str(row.get("preferred_title") or ""),
-                "source_root_kind": str(row.get("source_root_kind") or ""),
-                "source_type": str(row.get("source_type") or ""),
-                "resolved_session_path": str(row.get("resolved_session_path") or ""),
-                "message_count": int(row.get("message_count") or 0),
-                "event_count": int(row.get("event_count") or 0),
-                "segment_count": int(row.get("segment_count") or 0),
-                "observed_thread_name_count": int(row.get("observed_thread_name_count") or 0),
-                "has_mode": bool(row.get("has_mode")),
-                "attachment_count": int(row.get("attachment_count") or 0),
-                "limitations": list(row.get("limitations") or []),
-            }
-            for row in thread_rows
-        ],
-    }
-
-
-def build_run_catalog(
-    job_id: str,
-    source_files: list[dict[str, object]],
-    thread_rows: list[dict[str, object]],
-) -> dict[str, object]:
-    return {
-        "schema_version": 1,
-        "job_id": job_id,
-        "generated_at": now_iso(),
-        "source_files": sorted(source_files, key=lambda item: str(item.get("path") or "")),
-        "threads": sorted(thread_rows, key=lambda item: str(item.get("thread_id") or "")),
-    }
-
-
-def build_processing_profile(
-    job_id: str,
-    thread_rows: list[dict[str, object]],
-) -> dict[str, object]:
-    durations = [
-        float(row.get("processing_duration_ms") or 0.0)
-        for row in thread_rows
-    ]
-    rendered_count = sum(1 for row in thread_rows if str(row.get("cache_status") or "") == "rendered")
-    reused_count = sum(1 for row in thread_rows if str(row.get("cache_status") or "") == "reused")
-    slowest_threads = sorted(
-        [
-            {
-                "thread_id": str(row.get("thread_id") or ""),
-                "preferred_title": str(row.get("preferred_title") or ""),
-                "cache_status": str(row.get("cache_status") or ""),
-                "event_count": int(row.get("event_count") or 0),
-                "message_count": int(row.get("message_count") or 0),
-                "processing_duration_ms": float(row.get("processing_duration_ms") or 0.0),
-            }
-            for row in thread_rows
-        ],
-        key=lambda item: item["processing_duration_ms"],
-        reverse=True,
-    )[:10]
-    return {
-        "schema_version": 1,
-        "job_id": job_id,
-        "generated_at": now_iso(),
-        "thread_count": len(thread_rows),
-        "rendered_thread_count": rendered_count,
-        "reused_thread_count": reused_count,
-        "total_processing_duration_ms": round(sum(durations), 3),
-        "max_processing_duration_ms": round(max(durations), 3) if durations else 0.0,
-        "slowest_threads": slowest_threads,
-    }
-
-
-def load_previous_catalog(job_dir: Path) -> dict[str, object] | None:
-    current_pointer_path = job_dir.parent / "current.json"
-    if not current_pointer_path.exists():
-        return None
-
-    try:
-        current_pointer = read_json(current_pointer_path)
-    except Exception:
-        return None
-
-    previous_job_id = str(current_pointer.get("job_id") or "")
-    if previous_job_id == job_dir.name:
-        return None
-
-    catalog_path_text = str(current_pointer.get("catalog_path") or "")
-    if not catalog_path_text:
-        return None
-
-    catalog_path = Path(catalog_path_text)
-    if not catalog_path.exists():
-        return None
-
-    try:
-        return read_json(catalog_path)
-    except Exception:
-        return None
-
-
-def build_update_manifest(
-    job_id: str,
-    current_catalog: dict[str, object],
-    previous_catalog: dict[str, object] | None,
-) -> dict[str, object]:
-    previous_threads = _catalog_threads_by_id(previous_catalog)
-    current_threads = _catalog_threads_by_id(current_catalog)
-    previous_job_id = str(previous_catalog.get("job_id") or "") if previous_catalog is not None else ""
-    reused_thread_count = sum(
-        1
-        for row in current_threads.values()
-        if str(row.get("cache_status") or "") == "reused"
-    )
-
-    rows: list[dict[str, object]] = []
-    counts = {
-        "new": 0,
-        "changed": 0,
-        "unchanged": 0,
-        "missing": 0,
-        "degraded": 0,
-    }
-
-    for thread_id in sorted(current_threads):
-        current = current_threads[thread_id]
-        previous = previous_threads.get(thread_id)
-        status = _classify_thread_update(current, previous)
-        counts[status] += 1
-        rows.append(
-            {
-                "thread_id": thread_id,
-                "preferred_title": str(current.get("preferred_title") or ""),
-                "status": status,
-                "source_type": str(current.get("source_type") or ""),
-                "cache_status": str(current.get("cache_status") or ""),
-                "processing_duration_ms": float(current.get("processing_duration_ms") or 0.0),
-                "message_count": int(current.get("message_count") or 0),
-                "event_count": int(current.get("event_count") or 0),
-                "previous_message_count": int(previous.get("message_count") or 0) if previous is not None else 0,
-                "previous_event_count": int(previous.get("event_count") or 0) if previous is not None else 0,
-            }
-        )
-
-    for thread_id in sorted(set(previous_threads) - set(current_threads)):
-        previous = previous_threads[thread_id]
-        counts["missing"] += 1
-        rows.append(
-            {
-                "thread_id": thread_id,
-                "preferred_title": str(previous.get("preferred_title") or ""),
-                "status": "missing",
-                "source_type": str(previous.get("source_type") or ""),
-                "message_count": 0,
-                "event_count": 0,
-                "processing_duration_ms": 0.0,
-                "previous_message_count": int(previous.get("message_count") or 0),
-                "previous_event_count": int(previous.get("event_count") or 0),
-            }
-        )
-
-    return {
-        "schema_version": 1,
-        "job_id": job_id,
-        "previous_job_id": previous_job_id,
-        "generated_at": now_iso(),
-        "processing_mode": processing_mode_for_run(reused_thread_count),
-        "counts": counts,
-        "threads": rows,
-    }
-
-
-def _catalog_threads_by_id(catalog: dict[str, object] | None) -> dict[str, dict[str, object]]:
-    if catalog is None:
-        return {}
-
-    rows: dict[str, dict[str, object]] = {}
-    for item in catalog.get("threads") or []:
-        if not isinstance(item, dict):
-            continue
-        thread_id = str(item.get("thread_id") or "")
-        if thread_id:
-            rows[thread_id] = item
-    return rows
-
-
-def _classify_thread_update(
-    current: dict[str, object],
-    previous: dict[str, object] | None,
-) -> str:
-    if previous is None:
-        return "new"
-
-    current_message_count = int(current.get("message_count") or 0)
-    previous_message_count = int(previous.get("message_count") or 0)
-    current_source_type = str(current.get("source_type") or "")
-    previous_source_type = str(previous.get("source_type") or "")
-    if (
-        current_source_type == "missing" and previous_source_type != "missing"
-    ) or current_message_count < previous_message_count:
-        return "degraded"
-
-    comparable_keys = (
-        "source_refs",
-        "source_type",
-        "cache_key",
-        "convert_sha256",
-        "thread_sha256",
-        "parser_version",
-        "render_contract_version",
-        "message_count",
-        "event_count",
-    )
-    if all(current.get(key) == previous.get(key) for key in comparable_keys):
-        return "unchanged"
-
-    return "changed"
-
-
-def _source_type_from_path(path: Path | None) -> str:
-    if path is None:
-        return "missing"
-    suffix = path.suffix.lower()
-    if suffix == ".jsonl":
-        return "session_jsonl"
-    if suffix == ".json":
-        return "thread_read_json"
-    return "unknown"
 
 
 def _build_thread_limitations(
@@ -891,6 +361,17 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_type_from_path(path: Path | None) -> str:
+    if path is None:
+        return "missing"
+    suffix = path.suffix.lower()
+    if suffix == ".jsonl":
+        return "session_jsonl"
+    if suffix == ".json":
+        return "thread_read_json"
+    return "unknown"
+
+
 def _source_fingerprint_for_cache(
     source_fingerprint: dict[str, object] | None,
 ) -> dict[str, object] | None:
@@ -911,3 +392,57 @@ def _stable_payload_sha256(payload: dict[str, object]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _convert_cache_key(payload: dict[str, object]) -> str:
+    conversion = payload.get("conversion")
+    if isinstance(conversion, dict):
+        return str(conversion.get("cache_key") or "")
+    return ""
+
+
+def _read_optional_json(path: Path) -> dict[str, object]:
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        payload = read_json(path)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _message_count(convert_payload: dict[str, object], thread_payload: dict[str, object]) -> int:
+    value = convert_payload.get("message_count")
+    if value is None and isinstance(convert_payload.get("counts"), dict):
+        value = dict(convert_payload["counts"]).get("message_count")
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        messages = thread_payload.get("messages") if isinstance(thread_payload, dict) else []
+        return len(messages) if isinstance(messages, list) else 0
+
+
+def _attachment_count(convert_payload: dict[str, object], thread_payload: dict[str, object]) -> int:
+    value = convert_payload.get("attachment_count")
+    if value is not None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            pass
+    messages = thread_payload.get("messages") if isinstance(thread_payload, dict) else []
+    if not isinstance(messages, list):
+        return 0
+    return sum(
+        len(message.get("attachments") or [])
+        for message in messages
+        if isinstance(message, dict) and isinstance(message.get("attachments"), list)
+    )
+
+
+def _payload_title(thread_payload: dict[str, object], thread: ThreadSelection) -> str:
+    title = str(thread_payload.get("title") or "").strip()
+    return title or thread.preferred_title or thread.thread_id
+
+
+def _timestamp_for_filename() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")

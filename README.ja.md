@@ -1,174 +1,151 @@
 # TimelineForWindowsCodex
 
-`TimelineForWindowsCodex` は、Windows ローカルにある Codex Desktop の履歴を読み、thread 単位の master 生成物、診断情報、ZIP 受け渡しパッケージに変換する CLI 専用ツールです。
+`TimelineForWindowsCodex` は、Windows ローカルにある Codex Desktop 履歴を読み、スレッド単位の JSON 生成物として管理する CLI 専用ツールです。
 
 English README: [README.md](README.md)
 
-## 役割
+この製品の役割は、固定された master 出力先を最新化し、必要なときだけ ZIP として取り出せる状態にすることです。読みやすい全体タイムライン化や要約は後段の Timeline 製品や LLM に任せます。
+
+## できること
 
 - 複数の Codex 履歴ディレクトリを固定設定として読みます。
-- `sessions/**/*.jsonl` を主な会話本文 source として扱います。
-- archived `thread_reads` と `state_5.sqlite` は補助 source として扱います。
-- thread ごとに raw に近いユーザー / アシスタント / システム会話 `thread.json` を生成します。
-- thread ごとに変換情報をまとめた `convert.json` を生成します。
-- 圧縮履歴の `replacement_history` は、明示的に有効化した場合だけ復元対象にします。
-- カスタム指示、モデル、client runtime などは run directory 内の診断情報に分離します。
-- 欠損や未収録範囲は `fidelity_report.*` に明示します。
-- 最新成果物は ZIP として取り出せます。
-- 変化していない thread は前回成果物を再利用します。
-- 日付絞り込みや読みやすい global timeline 表示は、この製品ではなく後段の timeline 製品の責務です。
+- `sessions/**/*.jsonl`, `session_index.jsonl`, archived `thread_reads`, `state_5.sqlite` fallback metadata から thread を見つけます。
+- thread ごとに master ディレクトリを作ります。
+- 会話本文を `thread.json` に保存します。
+- source と変換情報を `convert_info.json` に保存します。
+- source と変換設定が変わっていない thread は再生成をスキップします。
+- 必要なときだけ日時付き ZIP を作ります。
 
 ## やらないこと
 
 - Web UI はありません。
+- master 出力先に job/run directory は作りません。
+- `current.json` や `refresh-history.jsonl` は作りません。
 - source の Codex transcript data は編集しません。
-- binary attachment 本体は export しません。
-- 確定的な thread rename event は復元しません。観測できた thread 名だけを扱います。
-- カスタム指示の厳密な保存時刻は復元しません。観測時点として扱います。
+- `state_5.sqlite` を会話本文の正本として扱いません。
+- binary attachment 本体は出力しません。
+- カスタム指示の厳密な保存時刻は復元しません。
+- tool call、terminal output、reasoning summary、細かい file diff は通常の `thread.json` に入れません。
 
-## 実行方針
+## 設定
 
-Windows 利用者向けの正面玄関は PowerShell です。
-
-```powershell
-.\tfwc.ps1 <command>
-```
-
-内部実行は Docker Compose です。WSL や host Python の直接実行は、自動テスト・開発検証用の裏口です。通常運用では host Python 直接実行はブロックされます。
-
-## CLI の考え方
-
-`TimelineForAudio` と概念をそろえつつ、この製品では source / artifact / job 操作を細かく分けません。利用者向けの主導線は、固定設定、Codex 履歴 item、過去 run の確認です。
-
-| コマンド群 | 役割 |
-|---|---|
-| `settings` | 固定設定を管理します。入力は複数、master 出力先は 1 つです。 |
-| `items` | 読み取れる Codex thread を確認し、最新化し、最新 ZIP を取り出します。 |
-| `runs` | 過去の refresh run を確認します。通常操作ではなく、履歴確認・診断用です。 |
-
-## 基本コマンド
-
-初期化と確認:
-
-```powershell
-.\tfwc.ps1 settings init
-.\tfwc.ps1 settings status
-```
-
-入力ディレクトリを設定:
-
-```powershell
-.\tfwc.ps1 settings inputs add /input/codex-home
-.\tfwc.ps1 settings inputs add /input/codex-backup
-.\tfwc.ps1 settings inputs list
-.\tfwc.ps1 settings inputs remove input-1234abcd
-```
-
-出力先 master を設定:
-
-```powershell
-.\tfwc.ps1 settings master set /shared/outputs
-.\tfwc.ps1 settings master show
-```
-
-item を確認:
-
-```powershell
-.\tfwc.ps1 items list --json
-```
-
-設定済み入力から最新化:
-
-```powershell
-.\tfwc.ps1 items refresh --json
-```
-
-最新化して ZIP も指定先へコピー:
-
-```powershell
-.\tfwc.ps1 items refresh --download-to /shared/outputs/handoff --json
-```
-
-最新 ZIP をコピー:
-
-```powershell
-.\tfwc.ps1 items download --to /shared/outputs/handoff
-```
-
-過去の実行を確認:
-
-```powershell
-.\tfwc.ps1 runs list --json
-.\tfwc.ps1 runs show --run-id <run-id> --json
-```
-
-明示的な source root で一時的に実行:
-
-```powershell
-.\tfwc.ps1 items refresh `
-  --primary-root /input/codex-home `
-  --include-archived-sources `
-  --json
-```
-
-item を絞って実行:
-
-```powershell
-.\tfwc.ps1 items refresh `
-  --primary-root /input/codex-home `
-  --item-id 11111111-2222-3333-4444-555555555555 `
-  --json
-```
-
-## 出力構成
-
-各 refresh は、設定された master 出力先の下に run directory を作ります。
+通常運用では repo 直下のローカル設定を使います。
 
 ```text
-<outputs-root>/
-  <run-id>/
-    request.json
-    status.json
-    result.json
-    manifest.json
-    README.md
-    fidelity_report.json
-    fidelity_report.md
-    catalog.json
-    processing_profile.json
-    update_manifest.json
-    environment/
-    export/TimelineForWindowsCodex-export-<run-id>.zip
-  <thread-id>/
-    convert.json
+C:\apps\TimelineForWindowsCodex\settings.json
+```
+
+`settings.json` は Git 管理しません。`.env` と同じく、各 PC 固有の source root と master output root を持つためです。存在しない場合、launcher が `settings.example.json` から自動作成します。
+
+主な項目:
+
+- `source_roots`: 読み取る Codex 履歴ディレクトリ
+- `outputs_root`: 固定 master 出力先
+- `redaction_profile`: `strict` または `loose`
+- `include_archived_sources`: archived thread reads を含めるか
+- `include_tool_outputs`: 互換項目。通常の `thread.json` には tool-output log を入れません
+- `include_compaction_recovery`: compaction `replacement_history` からの追加復元
+
+## 出力契約
+
+master 出力:
+
+```text
+<masterPath>/
+  <thread_id>/
+    convert_info.json
     thread.json
-  current.json
-  refresh-history.jsonl
 ```
 
-ZIP の中身は、受け渡しに必要な最小構成です。
-
-- `README.md`
-- `<thread_id>/convert.json`
-- `<thread_id>/thread.json`
-
-`environment/*`, `fidelity_report.*`, `catalog.json`, `processing_profile.json`, `update_manifest.json` は run directory には残しますが、通常のダウンロード ZIP には含めません。
-
-## 設定ファイル
-
-Docker Compose 通常運用では、永続設定は `/shared/app-data/settings.json` に保存されます。
-
-repo にはテンプレートだけを置きます。
+download ZIP:
 
 ```text
-C:\apps\TimelineForWindowsCodex\settings.example.json
+README.md
+items/
+  <thread_id>/
+    convert_info.json
+    thread.json
 ```
 
-`settings.json` と `.env` は各マシン固有のファイルなので Git 管理しません。
+`thread.json` は最終生成物です。
+
+```json
+{
+  "schema_version": 1,
+  "application": "TimelineForWindowsCodex",
+  "thread_id": "...",
+  "title": "...",
+  "created_at": "...",
+  "updated_at": "...",
+  "messages": [
+    {
+      "role": "user",
+      "created_at": "...",
+      "text": "..."
+    }
+  ]
+}
+```
+
+`convert_info.json` には、source fingerprint、変換設定、件数、既知の欠損情報を入れます。
+
+## CLI
+
+Windows では PowerShell が正面玄関です。repo root で実行します。
+
+```powershell
+.\cli.ps1 settings init
+.\cli.ps1 settings status
+.\cli.ps1 settings inputs list
+.\cli.ps1 settings inputs add /input/codex-home
+.\cli.ps1 settings inputs remove input-1234abcd
+.\cli.ps1 settings inputs clear
+.\cli.ps1 settings master show
+.\cli.ps1 settings master set /shared/outputs
+
+.\cli.ps1 items list --json
+.\cli.ps1 items refresh --json
+.\cli.ps1 items refresh --download-to /shared/downloads --json
+.\cli.ps1 items download --to /shared/downloads
+```
+
+補足:
+
+- `--item-id` を省略すると、見つかった全 thread が対象です。
+- `--item-id` は複数回指定できます。カンマ区切りも使えます。
+- `items refresh` は master 出力先を更新します。
+- `items download` は現在の master から ZIP を作ります。
+- 通常運用では host Python 直接実行をブロックします。テスト時だけ `TIMELINE_FOR_WINDOWS_CODEX_ALLOW_HOST_RUN=1` を使います。
+
+## Docker Compose
+
+Docker Compose は、`cli.ps1` から呼ばれたときだけ Python worker CLI を動かします。この製品では常駐 worker container を使いません。ブラウザ UI もありません。
+
+```powershell
+cp .env.example .env
+.\cli.ps1 settings status
+.\cli.ps1 items refresh --json
+```
+
+source mount は read-only です。`settings.json` は container 内の `/shared/app-data/settings.json` に mount されます。
+
+Docker resource を停止:
+
+```powershell
+.\stop.ps1
+```
+
+Docker resource をアンインストール:
+
+```powershell
+.\uninstall.ps1
+```
+
+アンインストールスクリプトは、Codex source 履歴、`outputs`、`downloads` は削除しません。app-data Docker volume や local `settings.json` を削除する前には別途確認します。
 
 ## テスト
 
-host Python での自動テストは、明示的なテスト用 override が必要です。
+Unit test:
 
 ```bash
 TIMELINE_FOR_WINDOWS_CODEX_ALLOW_HOST_RUN=1 \
@@ -176,45 +153,10 @@ PYTHONPATH=/mnt/c/apps/TimelineForWindowsCodex/worker/src \
 python3 -m unittest discover -s /mnt/c/apps/TimelineForWindowsCodex/worker/tests -v
 ```
 
-Docker Compose 経由の本番相当 smoke test:
+Docker production-like smoke test:
 
 ```powershell
-.\tfwc.ps1 smoke
+python tests/smoke/run_docker_compose_refresh.py
 ```
 
-## 現在の境界
-
-含まれるもの:
-
-- thread discovery
-- 単一 / 複数 / 全 thread export
-- raw に近い user / assistant / system 会話 `thread.json`
-- 変換情報 `convert.json`
-- 任意指定時の圧縮履歴 user / assistant message 復元
-- `<thread_id>/thread.json` と `<thread_id>/convert.json`
-- observed thread name points
-- run directory 内の environment ledger
-- run directory 内の fidelity report
-- `README.md` と thread ごとの `convert.json` / `thread.json` だけの小さい ZIP export
-- current artifact pointer
-- refresh history
-- unchanged thread artifact reuse
-- `settings inputs` / `settings master`
-- Docker-only guard
-
-通常の `thread.json` に含めないもの:
-
-- tool call 詳細
-- terminal command output
-- reasoning summary
-- fine-grained file edit diff
-- 日付範囲での絞り込み。この製品は取得可能な Codex thread 全体を管理します。
-
-未対応または低優先:
-
-- 確定的な thread rename event の復元
-- カスタム指示の厳密な保存時刻履歴
-- fine-grained file edit diff
-- binary attachment 本体 export
-- archived `thread_reads` の richer item coverage
-- state database からの広範な enrichment
+この smoke test は refresh を 2 回実行し、master 契約、download ZIP 契約、2 回目の unchanged skip を確認します。

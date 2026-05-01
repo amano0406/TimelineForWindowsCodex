@@ -65,9 +65,9 @@ class ThreadSelection:
 
 
 @dataclass
-class JobRequest:
+class RefreshRequest:
     schema_version: int = 1
-    job_id: str = ""
+    refresh_id: str = ""
     created_at: str = ""
     primary_codex_home_path: str = ""
     backup_codex_home_paths: list[str] = field(default_factory=list)
@@ -78,10 +78,10 @@ class JobRequest:
     selected_threads: list[ThreadSelection] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "JobRequest":
+    def from_dict(cls, payload: dict[str, Any]) -> "RefreshRequest":
         return cls(
             schema_version=int(payload.get("schema_version") or 1),
-            job_id=str(payload.get("job_id") or ""),
+            refresh_id=str(payload.get("refresh_id") or ""),
             created_at=str(payload.get("created_at") or ""),
             primary_codex_home_path=str(payload.get("primary_codex_home_path") or ""),
             backup_codex_home_paths=list(payload.get("backup_codex_home_paths") or []),
@@ -98,7 +98,7 @@ class JobRequest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
-            "job_id": self.job_id,
+            "refresh_id": self.refresh_id,
             "created_at": self.created_at,
             "primary_codex_home_path": self.primary_codex_home_path,
             "backup_codex_home_paths": self.backup_codex_home_paths,
@@ -108,57 +108,3 @@ class JobRequest:
             "redaction_profile": self.redaction_profile,
             "selected_threads": [item.to_dict() for item in self.selected_threads],
         }
-
-
-@dataclass
-class JobStatus:
-    schema_version: int = 1
-    job_id: str = ""
-    state: str = "pending"
-    current_stage: str = "queued"
-    message: str = ""
-    warnings: list[str] = field(default_factory=list)
-    threads_total: int = 0
-    threads_done: int = 0
-    events_total: int = 0
-    events_done: int = 0
-    progress_percent: float = 0.0
-    estimated_remaining_sec: float | None = None
-    current_thread_id: str | None = None
-    current_thread_title: str | None = None
-    started_at: str | None = None
-    updated_at: str | None = None
-    completed_at: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class JobResult:
-    schema_version: int = 1
-    job_id: str = ""
-    state: str = "pending"
-    thread_count: int = 0
-    event_count: int = 0
-    segment_count: int = 0
-    handoff_path: str | None = None
-    archive_path: str | None = None
-    warnings: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class ManifestThreadItem:
-    thread_id: str
-    preferred_title: str
-    session_path: str
-    source_root_path: str
-    status: str = "pending"
-    event_count: int = 0
-    thread_path: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)

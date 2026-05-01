@@ -13,11 +13,12 @@ services:
       TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT: /shared/outputs
     volumes:
       - app-data:/shared/app-data
-      - outputs:/shared/outputs
+      - ./outputs:/shared/outputs
+      - ./downloads:/shared/downloads
+      - ./settings.json:/shared/app-data/settings.json
       - ${HOST_CODEX_HOME:-/mnt/c/Users/amano/.codex}:/input/codex-home:ro
       - ${HOST_CODEX_BACKUP_HOME:-/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home}:/input/codex-backup:ro
       - ${HOST_CODEX_ROOT:-/mnt/c/Codex}:/input/codex-root:ro
 
 volumes:
   app-data:
-  outputs:

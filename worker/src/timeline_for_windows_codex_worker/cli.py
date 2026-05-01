@@ -4,24 +4,14 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import sys
+from uuid import uuid4
 from pathlib import Path
 
-from .contracts import JobRequest, ThreadSelection
+from .contracts import RefreshRequest, ThreadSelection
 from .discovery import discover_threads
-from .fs_utils import now_iso, read_json
-from .job_store import (
-    create_job,
-    create_job_id,
-    iter_run_dirs,
-    load_request,
-    load_status,
-    manifest_path,
-    request_path,
-    result_path,
-)
-from .processor import process_job
+from .fs_utils import now_iso
+from .processor import build_download_archive, process_refresh
 from .settings import RuntimeDefaults, load_runtime_defaults, load_runtime_paths
 from .settings import UserSettings, load_user_settings, save_user_settings, user_settings_path
 
@@ -57,21 +47,14 @@ def main(argv: list[str] | None = None) -> int:
     _add_format_argument(items_list_parser)
     items_refresh_parser = items_subparsers.add_parser("refresh")
     _add_source_arguments(items_refresh_parser)
-    _add_job_arguments(items_refresh_parser)
+    _add_refresh_arguments(items_refresh_parser)
     items_refresh_parser.add_argument("--download-to")
     items_refresh_parser.add_argument("--overwrite", action="store_true")
     items_download_parser = items_subparsers.add_parser("download")
     items_download_parser.add_argument("--to", required=True)
+    items_download_parser.add_argument("--item-id", action="append", default=[])
     items_download_parser.add_argument("--overwrite", action="store_true")
     _add_format_argument(items_download_parser)
-
-    runs_parser = subparsers.add_parser("runs")
-    runs_subparsers = runs_parser.add_subparsers(dest="runs_command", required=True)
-    runs_list_parser = runs_subparsers.add_parser("list")
-    _add_format_argument(runs_list_parser)
-    runs_show_parser = runs_subparsers.add_parser("show")
-    runs_show_parser.add_argument("--run-id", required=True)
-    _add_format_argument(runs_show_parser)
 
     settings_parser = subparsers.add_parser("settings")
     settings_subparsers = settings_parser.add_subparsers(dest="settings_command", required=True)
@@ -123,12 +106,6 @@ def main(argv: list[str] | None = None) -> int:
             if args.items_command == "download":
                 return _handle_items_download(args, outputs_root)
 
-        if args.command == "runs":
-            if args.runs_command == "list":
-                return _handle_list_jobs(args, outputs_root)
-            if args.runs_command == "show":
-                return _handle_show_job(args, outputs_root, args.run_id)
-
         if args.command == "settings":
             return _handle_settings(args, runtime, defaults, user_settings)
     except (FileNotFoundError, ValueError) as exc:
@@ -162,7 +139,7 @@ def _add_format_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_const", const="json", dest="format")
 
 
-def _add_job_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_refresh_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--item-id", action="append", default=[])
     parser.add_argument(
         "--include-tool-outputs",
@@ -222,24 +199,27 @@ def _handle_refresh(
     download_to: str | None = None,
     overwrite: bool = False,
 ) -> int:
-    request, job_dir = _prepare_job(args, outputs_root, defaults, user_settings, settings_only=settings_only)
-    process_job(job_dir)
-    payload = _build_refresh_summary(request, job_dir)
+    request = _prepare_refresh_request(args, outputs_root, defaults, user_settings, settings_only=settings_only)
+    payload = process_refresh(request, outputs_root)
     if download_to:
-        current_payload = _load_current_summary(outputs_root)
-        payload["download"] = _copy_current_archive(current_payload, download_to, overwrite=overwrite)
+        payload["download"] = build_download_archive(
+            outputs_root,
+            _resolve_destination_root(download_to),
+            overwrite=overwrite,
+            selected_item_ids=_selected_item_ids(args),
+        )
     _print_output(args.format, payload, _format_refresh_summary_text(payload))
     return 0
 
 
-def _prepare_job(
+def _prepare_refresh_request(
     args: argparse.Namespace,
     outputs_root: Path,
     defaults: RuntimeDefaults,
     user_settings: UserSettings,
     *,
     settings_only: bool = False,
-) -> tuple[JobRequest, Path]:
+) -> RefreshRequest:
     primary_root, backup_roots = _resolve_source_roots(args, defaults, user_settings, settings_only=settings_only)
     include_archived_sources = _resolve_include_archived(
         args.include_archived_sources,
@@ -263,9 +243,9 @@ def _prepare_job(
     if not selected_threads:
         raise ValueError("No threads matched the current selection.")
 
-    job_id = create_job_id(outputs_root)
-    request = JobRequest(
-        job_id=job_id,
+    refresh_id = _create_refresh_id(outputs_root)
+    request = RefreshRequest(
+        refresh_id=refresh_id,
         created_at=now_iso(),
         primary_codex_home_path=primary_root,
         backup_codex_home_paths=backup_roots,
@@ -275,14 +255,16 @@ def _prepare_job(
         redaction_profile=redaction_profile,
         selected_threads=selected_threads,
     )
-    job_dir = outputs_root / job_id
-    create_job(job_dir, request)
-    return request, job_dir
+    return request
 
 
 def _handle_items_download(args: argparse.Namespace, outputs_root: Path) -> int:
-    payload = _load_current_summary(outputs_root)
-    result_payload = _copy_current_archive(payload, args.to, overwrite=args.overwrite)
+    result_payload = build_download_archive(
+        outputs_root,
+        _resolve_destination_root(args.to),
+        overwrite=args.overwrite,
+        selected_item_ids=_selected_item_ids(args),
+    )
     _print_output(args.format, result_payload, _format_items_download_text(result_payload))
     return 0
 
@@ -385,7 +367,7 @@ def _handle_settings_init(
 
     output_root = _normalize_config_path(
         args.output_root
-        or "/mnt/c/Codex/archive/TimelineForWindowsCodex/outputs"
+        or str(runtime.outputs_root)
     )
     if args.force or not user_settings.outputs_root:
         user_settings.outputs_root = output_root
@@ -394,81 +376,15 @@ def _handle_settings_init(
     return _print_settings(args, runtime, user_settings)
 
 
-def _load_current_summary(outputs_root: Path) -> dict[str, object]:
-    current_path = outputs_root / "current.json"
-    if not current_path.exists():
-        raise FileNotFoundError(f"Current artifact was not found: {current_path}")
-
-    current = read_json(current_path)
-    archive_path = Path(str(current.get("archive_path") or ""))
-    update_manifest = _read_optional_json(Path(str(current.get("update_manifest_path") or "")))
-    fidelity = _read_optional_json(Path(str(current.get("fidelity_report_path") or "")))
-    processing_profile = _read_optional_json(Path(str(current.get("processing_profile_path") or "")))
-    warnings = fidelity.get("warnings", []) if isinstance(fidelity.get("warnings"), list) else []
-    archive_size_bytes = archive_path.stat().st_size if archive_path.exists() and archive_path.is_file() else 0
-    return {
-        "state": current.get("state"),
-        "run_id": current.get("job_id"),
-        "updated_at": current.get("updated_at"),
-        "run_directory": current.get("run_directory"),
-        "archive_path": str(archive_path),
-        "archive_exists": archive_path.exists() and archive_path.is_file(),
-        "archive_size_bytes": archive_size_bytes,
-        "readme_path": current.get("readme_path"),
-        "catalog_path": current.get("catalog_path"),
-        "update_manifest_path": current.get("update_manifest_path"),
-        "fidelity_report_path": current.get("fidelity_report_path"),
-        "processing_profile_path": current.get("processing_profile_path"),
-        "processing_mode": current.get("processing_mode"),
-        "thread_count": current.get("thread_count", 0),
-        "event_count": current.get("event_count", 0),
-        "reused_thread_count": current.get("reused_thread_count", 0),
-        "rendered_thread_count": current.get("rendered_thread_count", 0),
-        "update_counts": update_manifest.get("counts", {}),
-        "fidelity_warning_count": len(warnings),
-        "slowest_threads": processing_profile.get("slowest_threads", []),
-    }
-
-
-def _build_refresh_summary(request: JobRequest, job_dir: Path) -> dict[str, object]:
-    status = load_status(job_dir)
-    result = read_json(result_path(job_dir))
-    update_manifest = read_json(job_dir / "update_manifest.json") if (job_dir / "update_manifest.json").exists() else {}
-    current = read_json(job_dir.parent / "current.json") if (job_dir.parent / "current.json").exists() else {}
-    fidelity = read_json(job_dir / "fidelity_report.json") if (job_dir / "fidelity_report.json").exists() else {}
-    processing_profile = (
-        read_json(job_dir / "processing_profile.json")
-        if (job_dir / "processing_profile.json").exists()
-        else {}
-    )
-    return {
-        "run_id": request.job_id,
-        "refresh_id": request.job_id,
-        "run_directory": str(job_dir),
-        "state": status.state,
-        "archive_path": result.get("archive_path"),
-        "thread_count": result.get("thread_count", len(request.selected_threads)),
-        "event_count": result.get("event_count", 0),
-        "processing_mode": update_manifest.get("processing_mode"),
-        "reused_thread_count": current.get("reused_thread_count", 0),
-        "rendered_thread_count": current.get("rendered_thread_count", 0),
-        "source_types": fidelity.get("source_types", []),
-        "fidelity_warning_count": len(fidelity.get("warnings", [])) if isinstance(fidelity.get("warnings"), list) else 0,
-        "update_counts": update_manifest.get("counts", {}),
-        "slowest_threads": processing_profile.get("slowest_threads", []),
-    }
-
-
 def _format_refresh_summary_text(payload: dict[str, object]) -> str:
     counts = payload["update_counts"] if isinstance(payload.get("update_counts"), dict) else {}
-    slowest_threads = payload["slowest_threads"] if isinstance(payload.get("slowest_threads"), list) else []
     lines = [
-        f"run_id: {payload.get('run_id') or payload.get('refresh_id') or ''}",
-        f"run_directory: {payload.get('run_directory') or ''}",
+        f"refresh_id: {payload.get('refresh_id') or ''}",
         f"state: {payload.get('state') or ''}",
-        f"archive_path: {payload.get('archive_path') or ''}",
+        f"master_root: {payload.get('master_root') or ''}",
         f"thread_count: {payload.get('thread_count') or 0}",
-        f"event_count: {payload.get('event_count') or 0}",
+        f"message_count: {payload.get('message_count') or 0}",
+        f"attachment_count: {payload.get('attachment_count') or 0}",
         f"processing_mode: {payload.get('processing_mode') or ''}",
         f"reused_thread_count: {payload.get('reused_thread_count') or 0}",
         f"rendered_thread_count: {payload.get('rendered_thread_count') or 0}",
@@ -477,57 +393,11 @@ def _format_refresh_summary_text(payload: dict[str, object]) -> str:
             f"{name}={counts.get(name, 0)}"
             for name in ("new", "changed", "unchanged", "missing", "degraded")
         ),
-        f"fidelity_warning_count: {payload.get('fidelity_warning_count') or 0}",
     ]
     download = payload.get("download")
     if isinstance(download, dict):
         lines.append(f"download_destination_path: {download.get('destination_path') or ''}")
-    lines.extend(
-        [
-            "slowest_threads:",
-            *[
-                "- "
-                + " | ".join(
-                    [
-                        str(item.get("thread_id") or ""),
-                        str(item.get("preferred_title") or ""),
-                        f"{item.get('processing_duration_ms', 0)}ms",
-                        str(item.get("cache_status") or ""),
-                    ]
-                )
-                for item in slowest_threads[:5]
-                if isinstance(item, dict)
-            ],
-        ]
-    )
     return "\n".join(lines)
-
-
-def _copy_current_archive(
-    current_payload: dict[str, object],
-    destination: str,
-    *,
-    overwrite: bool,
-) -> dict[str, object]:
-    archive_path = Path(str(current_payload.get("archive_path") or ""))
-    if not archive_path.exists() or not archive_path.is_file():
-        raise FileNotFoundError(f"Current archive was not found: {archive_path}")
-
-    destination_root = _resolve_destination_root(destination)
-    destination_root.mkdir(parents=True, exist_ok=True)
-    destination_path = destination_root / archive_path.name
-    if destination_path.exists() and not overwrite:
-        raise ValueError(f"Destination already exists. Pass --overwrite to replace it: {destination_path}")
-    shutil.copy2(archive_path, destination_path)
-
-    return {
-        "state": "completed",
-        "source_archive_path": str(archive_path),
-        "destination_path": str(destination_path),
-        "thread_count": current_payload.get("thread_count", 0),
-        "event_count": current_payload.get("event_count", 0),
-        "updated_at": current_payload.get("updated_at"),
-    }
 
 
 def _format_items_download_text(payload: dict[str, object]) -> str:
@@ -535,21 +405,11 @@ def _format_items_download_text(payload: dict[str, object]) -> str:
         [
             f"state: {payload.get('state') or ''}",
             f"destination_path: {payload.get('destination_path') or ''}",
-            f"source_archive_path: {payload.get('source_archive_path') or ''}",
+            f"master_root: {payload.get('master_root') or ''}",
             f"thread_count: {payload.get('thread_count') or 0}",
-            f"event_count: {payload.get('event_count') or 0}",
+            f"message_count: {payload.get('message_count') or 0}",
         ]
     )
-
-
-def _read_optional_json(path: Path) -> dict[str, object]:
-    if not str(path) or not path.exists() or not path.is_file():
-        return {}
-    try:
-        payload = read_json(path)
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 def _print_settings(
@@ -645,50 +505,6 @@ def _print_settings_master(
             ]
         ),
     )
-    return 0
-
-
-def _handle_list_jobs(args: argparse.Namespace, outputs_root: Path) -> int:
-    rows = []
-    for job_dir in reversed(iter_run_dirs(outputs_root)):
-        request = load_request(job_dir)
-        status = load_status(job_dir)
-        result = read_json(result_path(job_dir)) if result_path(job_dir).exists() else {}
-        rows.append(
-            {
-                "run_id": request.job_id,
-                "state": status.state,
-                "current_stage": status.current_stage,
-                "created_at": request.created_at,
-                "updated_at": status.updated_at,
-                "thread_count": len(request.selected_threads),
-                "threads_done": status.threads_done,
-                "archive_path": result.get("archive_path"),
-            }
-        )
-
-    _print_output(args.format, rows, _format_list_jobs_text(rows))
-    return 0
-
-
-def _handle_show_job(args: argparse.Namespace, outputs_root: Path, run_id: str) -> int:
-    job_dir = _resolve_job_dir(run_id, outputs_root)
-    if not request_path(job_dir).exists():
-        raise FileNotFoundError(f"Run was not found: {run_id}")
-
-    request = load_request(job_dir)
-    status = load_status(job_dir)
-    result = read_json(result_path(job_dir)) if result_path(job_dir).exists() else {}
-    manifest = read_json(manifest_path(job_dir)) if manifest_path(job_dir).exists() else {}
-    payload = {
-        "run_id": request.job_id,
-        "run_directory": str(job_dir),
-        "status": status.to_dict(),
-        "result": result,
-        "manifest": manifest,
-        "selected_threads": [thread.to_dict() for thread in request.selected_threads],
-    }
-    _print_output(args.format, payload, _format_show_job_text(job_dir, request, status, result))
     return 0
 
 
@@ -872,16 +688,6 @@ def _selected_item_ids(args: argparse.Namespace) -> list[str]:
     return [str(item) for item in getattr(args, "item_id", []) or []]
 
 
-def _resolve_job_dir(job: str, outputs_root: Path) -> Path:
-    candidate = Path(job)
-    if candidate.is_absolute():
-        return candidate.resolve()
-    outputs_candidate = (outputs_root / job).resolve()
-    if outputs_candidate.exists():
-        return outputs_candidate
-    return candidate.resolve()
-
-
 def _print_output(format_name: str, payload: object, text_output: str) -> None:
     if format_name == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -905,39 +711,7 @@ def _format_discovery_text(discovered: list[ThreadSelection]) -> str:
     )
 
 
-def _format_list_jobs_text(rows: list[dict[str, object]]) -> str:
-    if not rows:
-        return "No runs found."
-    return "\n".join(
-        " | ".join(
-            [
-                str(row.get("run_id") or ""),
-                str(row.get("state") or ""),
-                f"{row.get('threads_done', 0)}/{row.get('thread_count', 0)} threads",
-                str(row.get("updated_at") or "-"),
-            ]
-        )
-        for row in rows
-    )
-
-
-def _format_show_job_text(
-    job_dir: Path,
-    request: JobRequest,
-    status,
-    result: dict[str, object],
-) -> str:
-    lines = [
-        f"run_id: {request.job_id}",
-        f"run_directory: {job_dir}",
-        f"state: {status.state}",
-        f"current_stage: {status.current_stage}",
-        f"archive_path: {result.get('archive_path') or ''}",
-        f"thread_count: {len(request.selected_threads)}",
-        "selected_threads:",
-    ]
-    lines.extend(
-        f"- {thread.thread_id} | {thread.preferred_title or thread.thread_id}"
-        for thread in request.selected_threads
-    )
-    return "\n".join(lines)
+def _create_refresh_id(outputs_root: Path) -> str:
+    outputs_root.mkdir(parents=True, exist_ok=True)
+    stamp = now_iso().replace(":", "").replace("-", "")[:15]
+    return f"refresh-{stamp}-{uuid4().hex[:8]}"

@@ -1,52 +1,11 @@
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any
 
 from .contracts import ThreadSelection
 
-RUN_INCLUDED_ITEMS = [
-    "Per-thread thread.json files with raw-like user/assistant/system message chains",
-    "Per-thread convert.json files with stable source and conversion metadata",
-    "Optional compaction replacement_history recovery when explicitly enabled",
-    "Observed thread names from supported sources",
-    "Cross-thread environment observations in run diagnostics",
-    "ZIP bundle with README.md and <thread_id>/convert.json plus <thread_id>/thread.json files",
-]
-
-RUN_LIMITATION_ITEMS = [
-    "Confirmed thread rename events are not reconstructed; thread names are observation points.",
-    "Exact custom-instruction save timestamps are not reconstructed; only observation times are recorded.",
-    "Compaction-recovered messages use the compaction observation time when the original send time is unavailable.",
-    "Fine-grained file edit diffs are not exported.",
-    "Binary attachment contents are not exported; only attachment labels or file names are preserved when visible.",
-    "Archived thread_reads coverage is limited to currently supported item types.",
-]
-
-
-def build_segments(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not events:
-        return []
-
-    segments: list[dict[str, Any]] = []
-    current_events: list[dict[str, Any]] = []
-    current_bucket: str | None = None
-
-    for event in events:
-        bucket = _segment_bucket(event)
-        if current_events and bucket != current_bucket:
-            segments.append(_make_segment(len(segments) + 1, current_bucket or "misc", current_events))
-            current_events = []
-        current_bucket = bucket
-        current_events.append(event)
-
-    if current_events:
-        segments.append(_make_segment(len(segments) + 1, current_bucket or "misc", current_events))
-
-    return segments
-
-
-THREAD_CONVERT_FILE_NAME = "convert.json"
+THREAD_CONVERT_INFO_FILE_NAME = "convert_info.json"
+THREAD_CONVERT_FILE_NAME = THREAD_CONVERT_INFO_FILE_NAME
 THREAD_FINAL_FILE_NAME = "thread.json"
 
 
@@ -60,34 +19,31 @@ def build_thread_conversation_payload(
     transcript_rows: list[dict[str, Any]],
     limitations: list[str],
 ) -> dict[str, Any]:
+    messages = _thread_messages(transcript_rows)
+    first_message_at = next((str(message.get("created_at") or "") for message in messages if message.get("created_at")), "")
+    last_message_at = next(
+        (
+            str(message.get("created_at") or "")
+            for message in reversed(messages)
+            if message.get("created_at")
+        ),
+        "",
+    )
     return {
         "schema_version": 1,
-        "generated_by": "TimelineForWindowsCodex",
-        "thread": {
-            "thread_id": thread.thread_id,
-            "preferred_title": thread.preferred_title,
-            "observed_thread_names": [
-                item for item in _dedupe_thread_name_observations(thread.observed_thread_names)
-            ],
-            "source_root_path": thread.source_root_path,
-            "source_root_kind": thread.source_root_kind,
-            "session_path": thread.session_path,
-            "updated_at": thread.updated_at,
-            "cwd": thread.cwd,
-            "first_user_message_excerpt": thread.first_user_message_excerpt,
-        },
-        "messages": _thread_messages(thread, transcript_rows),
-        "known_gaps": limitations,
+        "application": "TimelineForWindowsCodex",
+        "thread_id": thread.thread_id,
+        "title": thread.preferred_title or thread.thread_id,
+        "created_at": first_message_at or thread.updated_at,
+        "updated_at": thread.updated_at or last_message_at or first_message_at,
+        "messages": messages,
     }
 
 
 def build_thread_convert_payload(
     *,
     thread: ThreadSelection,
-    events: list[dict[str, Any]],
     transcript_rows: list[dict[str, Any]],
-    segments: list[dict[str, Any]],
-    environment_observations: list[dict[str, Any]],
     source_fingerprint: dict[str, object] | None,
     source_type: str,
     limitations: list[str],
@@ -97,275 +53,30 @@ def build_thread_convert_payload(
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
-        "generated_by": "TimelineForWindowsCodex",
+        "application": "TimelineForWindowsCodex",
         "thread_id": thread.thread_id,
-        "source": {
+        "title": thread.preferred_title or thread.thread_id,
+        "source_session": {
             "type": source_type,
-            "fingerprint": _stable_source_fingerprint(source_fingerprint),
+            **(_stable_source_fingerprint(source_fingerprint) or {}),
         },
+        "source_root_path": thread.source_root_path,
+        "source_root_kind": thread.source_root_kind,
+        "message_count": len(transcript_rows),
+        "attachment_count": sum(
+            len(row.get("attachments") or [])
+            for row in transcript_rows
+            if isinstance(row.get("attachments"), list)
+        ),
+        "converted_at": None,
         "conversion": {
             "parser_version": parser_version,
             "render_contract_version": render_contract_version,
             "cache_key": cache_key,
             "redaction_note": "Content is redacted according to the active redaction profile before export.",
         },
-        "counts": {
-            "message_count": len(transcript_rows),
-            "event_count": len(events),
-            "segment_count": len(segments),
-            "environment_observation_count": len(environment_observations),
-        },
         "known_gaps": limitations,
     }
-
-
-def render_export_readme_md(
-    job_id: str,
-    *,
-    generated_at: str,
-    thread_rows: list[dict[str, Any]],
-) -> str:
-    thread_count = len(thread_rows)
-    message_total = sum(int(row.get("message_count") or 0) for row in thread_rows)
-    lines = [
-        "# TimelineForWindowsCodex export",
-        "",
-        "This package was generated by `TimelineForWindowsCodex`.",
-        "`TimelineForWindowsCodex` は Windows Codex のローカル thread 情報を管理し、thread 単位の JSON として取り出すためのローカルツールです。",
-        "",
-        "## Summary",
-        "",
-        f"- Run ID: `{job_id}`",
-        f"- Generated at: `{generated_at}`",
-        f"- Thread count: `{thread_count}`",
-        f"- Message count: `{message_total}`",
-        "",
-        "## Layout",
-        "",
-        "- `README.md`: this file",
-        "- `<thread_id>/convert.json`: stable conversion metadata for one Codex thread",
-        "- `<thread_id>/thread.json`: final user/assistant/system conversation JSON for one Codex thread",
-        "",
-        "## Notes",
-        "",
-        "- Codex local history is the source of truth.",
-        "- The download ZIP is a handoff package, not the primary database.",
-        "- Thread conversation files are JSON so downstream timeline or LLM tools can decide how to filter, render, or summarize them.",
-        "- Binary attachment bodies are not included; visible labels or file names are preserved when available.",
-        "",
-        "## Items",
-        "",
-    ]
-    for row in sorted(thread_rows, key=lambda item: str(item.get("thread_id") or "")):
-        thread_id = str(row.get("thread_id") or "")
-        item_dir = str(row.get("export_thread_dir") or export_thread_dir_name(thread_id))
-        preferred_title = str(row.get("preferred_title") or "")
-        title_part = f" | {preferred_title}" if preferred_title and preferred_title != thread_id else ""
-        lines.append(
-            f"- `{thread_id}` -> `{item_dir}/{THREAD_FINAL_FILE_NAME}` and `{item_dir}/{THREAD_CONVERT_FILE_NAME}`{title_part} "
-            f"({int(row.get('message_count') or 0)} messages)"
-        )
-    lines.append("")
-    return "\n".join(lines)
-
-
-def build_environment_ledger(observations: list[dict[str, Any]]) -> dict[str, Any]:
-    grouped_rows = {
-        "custom_instruction": [],
-        "model_profile": [],
-        "client_runtime": [],
-    }
-    grouped_lookup: dict[str, dict[str, dict[str, Any]]] = {
-        key: {} for key in grouped_rows
-    }
-    prefixes = {
-        "custom_instruction": "CI",
-        "model_profile": "MP",
-        "client_runtime": "CR",
-    }
-
-    ordered = sorted(
-        observations,
-        key=lambda item: (
-            str(item.get("timestamp") or ""),
-            str(item.get("thread_id") or ""),
-            str(item.get("kind") or ""),
-            str(item.get("fingerprint") or ""),
-        ),
-    )
-
-    for observation in ordered:
-        kind = str(observation.get("kind") or "")
-        fingerprint = str(observation.get("fingerprint") or "")
-        if kind not in grouped_lookup or not fingerprint:
-            continue
-
-        current = grouped_lookup[kind].get(fingerprint)
-        if current is None:
-            current = {
-                "id": f"{prefixes[kind]}-{len(grouped_rows[kind]) + 1:03d}",
-                "kind": kind,
-                "fingerprint": fingerprint,
-                "first_observed_at": observation.get("timestamp"),
-                "last_observed_at": observation.get("timestamp"),
-                "first_thread_id": observation.get("thread_id"),
-                "first_thread_name": observation.get("thread_name"),
-                "first_turn_id": observation.get("turn_id"),
-                "observed_count": 0,
-                "_thread_ids": set(),
-                "_session_paths": set(),
-            }
-
-            if kind == "custom_instruction":
-                current["text"] = observation.get("text") or ""
-            elif kind == "model_profile":
-                current.update(
-                    {
-                        "model": observation.get("model") or "",
-                        "reasoning_effort": observation.get("reasoning_effort") or "",
-                        "personality": observation.get("personality") or "",
-                        "collaboration_mode": observation.get("collaboration_mode") or "",
-                    }
-                )
-            elif kind == "client_runtime":
-                current.update(
-                    {
-                        "cli_version": observation.get("cli_version") or "",
-                        "originator": observation.get("originator") or "",
-                        "source": observation.get("source") or "",
-                        "model_provider": observation.get("model_provider") or "",
-                    }
-                )
-
-            grouped_lookup[kind][fingerprint] = current
-            grouped_rows[kind].append(current)
-
-        current["observed_count"] = int(current["observed_count"]) + 1
-        current["last_observed_at"] = observation.get("timestamp") or current["last_observed_at"]
-        current["_thread_ids"].add(str(observation.get("thread_id") or ""))
-        current["_session_paths"].add(str(observation.get("session_path") or ""))
-
-    return {
-        "schema_version": 1,
-        "observation_count": len(ordered),
-        "custom_instructions": _finalize_environment_rows(grouped_rows["custom_instruction"]),
-        "model_profiles": _finalize_environment_rows(grouped_rows["model_profile"]),
-        "client_runtimes": _finalize_environment_rows(grouped_rows["client_runtime"]),
-    }
-
-
-def render_environment_ledger_md(job_id: str, ledger: dict[str, Any]) -> str:
-    lines = [
-        f"# Environment ledger {job_id}",
-        "",
-        "This file stores cross-thread environment observations deduplicated across the selected threads.",
-        "このファイルは、選択したスレッド群から重複除去した環境観測をまとめた台帳です。",
-        "`first_observed_at` is the earliest time this run observed the value. "
-        "It may be later than the actual save time.",
-        "`first_observed_at` は今回の run が最初に観測した時刻です。実際の保存時刻より後になる場合があります。",
-        "",
-    ]
-
-    _append_custom_instruction_section(lines, ledger.get("custom_instructions") or [])
-    _append_model_profile_section(lines, ledger.get("model_profiles") or [])
-    _append_client_runtime_section(lines, ledger.get("client_runtimes") or [])
-    return "\n".join(lines).strip() + "\n"
-
-
-def render_fidelity_report_md(job_id: str, report: dict[str, Any]) -> str:
-    lines = [
-        f"# Fidelity report {job_id}",
-        "",
-        "This file records the source coverage used for this run and the known fidelity gaps.",
-        "このファイルは、この run で採用した source と、既知の情報欠損・未収録範囲をまとめたレポートです。",
-        "",
-        f"- Threads / スレッド数: `{report.get('thread_count', 0)}`",
-        f"- Included source types / 採用 source 種別: `{', '.join(report.get('source_types', [])) or '-'}`",
-        "",
-        "## Included in this run / 今回の run に含めたもの",
-        "",
-    ]
-
-    for item in report.get("included", []):
-        lines.append(f"- {item}")
-
-    lines.extend(["", "## Known gaps / 既知の欠損・未収録", ""])
-    for item in report.get("limitations", []):
-        lines.append(f"- {item}")
-
-    warnings = report.get("warnings") or []
-    if warnings:
-        lines.extend(["", "## Run warnings / run ごとの注意", ""])
-        for item in warnings:
-            lines.append(f"- {item}")
-
-    lines.extend(["", "## Per-thread source summary / スレッドごとの source 概要", ""])
-
-    for thread in report.get("threads", []):
-        lines.extend(
-            [
-                f"### {thread.get('thread_id', '')}",
-                "",
-                f"- Preferred name / 表示名: `{thread.get('preferred_title', '')}`",
-                f"- Source kind / source 区分: `{thread.get('source_root_kind', '')}`",
-                f"- Source type / source 種別: `{thread.get('source_type', '')}`",
-                f"- Resolved path / 解決した path: `{thread.get('resolved_session_path', '')}`",
-                f"- Messages / 発話数: `{thread.get('message_count', 0)}`",
-                f"- Events / イベント数: `{thread.get('event_count', 0)}`",
-                f"- Segments / セグメント数: `{thread.get('segment_count', 0)}`",
-                f"- Observed thread names / 観測スレッド名数: `{thread.get('observed_thread_name_count', 0)}`",
-                f"- Mode observed / mode 観測: `{thread.get('has_mode', False)}`",
-                f"- Attachment labels / 添付ラベル数: `{thread.get('attachment_count', 0)}`",
-            ]
-        )
-        limitations = thread.get("limitations") or []
-        if limitations:
-            lines.append("- Thread-specific limitations / スレッド固有の注意:")
-            for item in limitations:
-                lines.append(f"  - {item}")
-        lines.append("")
-
-    return "\n".join(lines).strip() + "\n"
-
-
-def _segment_bucket(event: dict[str, Any]) -> str:
-    kind = str(event.get("kind") or "")
-    if kind in {"message", "reasoning"}:
-        return "conversation"
-    if kind in {"tool_call", "tool_output"}:
-        return str(event.get("tool_family") or "tooling")
-    return "system"
-
-
-def _make_segment(index: int, bucket: str, events: list[dict[str, Any]]) -> dict[str, Any]:
-    label = _segment_label(bucket, events)
-    return {
-        "segment_id": f"seg-{index:03d}",
-        "bucket": bucket,
-        "label": label,
-        "started_at": events[0].get("timestamp"),
-        "ended_at": events[-1].get("timestamp"),
-        "event_count": len(events),
-        "events": events,
-    }
-
-
-def _segment_label(bucket: str, events: list[dict[str, Any]]) -> str:
-    if bucket == "conversation":
-        actors = Counter(str(event.get("actor") or "unknown") for event in events)
-        actors_label = ", ".join(sorted(actors.keys()))
-        return f"Conversation block ({actors_label})"
-    if bucket == "terminal":
-        return "Terminal block"
-    if bucket == "file_edit":
-        return "File edit block"
-    if bucket == "browser":
-        return "Browser block"
-    if bucket == "mcp":
-        return "MCP block"
-    if bucket == "tooling":
-        return "Tool block"
-    return "System block"
 
 
 def _normalize_message_for_item(row: dict[str, Any]) -> dict[str, Any]:
@@ -373,55 +84,34 @@ def _normalize_message_for_item(row: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "role": actor or "unknown",
         "created_at": row.get("timestamp"),
-        "sequence": row.get("sequence"),
-        "phase": row.get("phase"),
-        "mode": row.get("mode"),
         "text": str(row.get("raw_text") or row.get("text") or ""),
-        "attachments": row.get("attachments") if isinstance(row.get("attachments"), list) else [],
     }
+    mode = row.get("mode")
+    if mode:
+        payload["mode"] = mode
+    attachments = row.get("attachments") if isinstance(row.get("attachments"), list) else []
+    if attachments:
+        payload["attachments"] = attachments
     source = str(row.get("source") or "").strip()
     if source:
         payload["source"] = source
     return payload
 
 
-def _thread_messages(thread: ThreadSelection, transcript_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    messages = _thread_system_messages(thread)
-    messages.extend(_normalize_message_for_item(row) for row in transcript_rows)
-    messages.sort(key=_message_sort_key)
-    return messages
+def _thread_messages(transcript_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        _normalize_message_for_item(row)
+        for row in sorted(transcript_rows, key=_transcript_row_sort_key)
+    ]
 
 
-def _thread_system_messages(thread: ThreadSelection) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for index, observation in enumerate(_dedupe_thread_name_observations(thread.observed_thread_names), start=1):
-        name = str(observation.get("name") or "").strip()
-        if not name:
-            continue
-        rows.append(
-            {
-                "role": "system",
-                "created_at": observation.get("observed_at") or thread.updated_at,
-                "sequence": -10_000 + index,
-                "phase": "thread_metadata",
-                "mode": None,
-                "kind": "observed_thread_name",
-                "text": f"Observed thread name: {name}",
-                "attachments": [],
-                "source": observation.get("source") or "",
-                "observed_thread_name": name,
-            }
-        )
-    return rows
-
-
-def _message_sort_key(message: dict[str, Any]) -> tuple[str, int, str]:
-    sequence = message.get("sequence")
+def _transcript_row_sort_key(row: dict[str, Any]) -> tuple[str, int, str]:
+    sequence = row.get("sequence")
     sequence_value = sequence if isinstance(sequence, int) else 0
     return (
-        str(message.get("created_at") or ""),
+        str(row.get("timestamp") or ""),
         sequence_value,
-        str(message.get("role") or ""),
+        str(row.get("actor") or ""),
     )
 
 
@@ -438,123 +128,3 @@ def _stable_source_fingerprint(source_fingerprint: dict[str, object] | None) -> 
 def _safe_thread_id_filename(thread_id: str) -> str:
     text = str(thread_id or "").strip()
     return text.replace("/", "_").replace("\\", "_") or "thread"
-
-
-def _dedupe_thread_name_observations(values: list[Any]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for value in values:
-        name = str(getattr(value, "name", "") or "").strip()
-        observed_at = str(getattr(value, "observed_at", "") or "").strip()
-        source = str(getattr(value, "source", "") or "").strip()
-        if not name:
-            continue
-        key = (name, observed_at, source)
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append(
-            {
-                "name": name,
-                "observed_at": observed_at,
-                "source": source,
-            }
-        )
-    rows.sort(
-        key=lambda item: (
-            str(item.get("observed_at") or ""),
-            str(item.get("source") or ""),
-            str(item.get("name") or ""),
-        )
-    )
-    return rows
-
-
-def _finalize_environment_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    finalized: list[dict[str, Any]] = []
-    for row in rows:
-        thread_ids = sorted(item for item in row["_thread_ids"] if item)
-        session_paths = sorted(item for item in row["_session_paths"] if item)
-        finalized.append(
-            {
-                key: value
-                for key, value in row.items()
-                if not key.startswith("_")
-            }
-            | {
-                "thread_ids": thread_ids,
-                "thread_count": len(thread_ids),
-                "session_paths": session_paths,
-                "session_count": len(session_paths),
-            }
-        )
-    return finalized
-
-
-def _append_custom_instruction_section(lines: list[str], rows: list[dict[str, Any]]) -> None:
-    lines.extend(["## Custom instruction versions / カスタム指示の版", ""])
-    if not rows:
-        lines.extend(["No custom instruction observations were captured. 観測されたカスタム指示はありません。", ""])
-        return
-
-    for row in rows:
-        lines.extend(
-            [
-                f"### {row['id']}",
-                "",
-                f"- First observed at / 最初の観測時刻: `{row.get('first_observed_at') or ''}`",
-                f"- First thread ID / 最初のスレッドID: `{row.get('first_thread_id') or ''}`",
-                f"- First turn ID / 最初のターンID: `{row.get('first_turn_id') or ''}`",
-                f"- Observed count / 観測回数: `{row.get('observed_count') or 0}`",
-                f"- Thread count / 対象スレッド数: `{row.get('thread_count') or 0}`",
-                "",
-                "```text",
-                str(row.get("text") or ""),
-                "```",
-                "",
-            ]
-        )
-
-
-def _append_model_profile_section(lines: list[str], rows: list[dict[str, Any]]) -> None:
-    lines.extend(["## Model profiles / モデル設定", ""])
-    if not rows:
-        lines.extend(["No model profile observations were captured. 観測されたモデル設定はありません。", ""])
-        return
-
-    for row in rows:
-        lines.extend(
-            [
-                f"### {row['id']}",
-                "",
-                f"- First observed at / 最初の観測時刻: `{row.get('first_observed_at') or ''}`",
-                f"- Model / モデル: `{row.get('model') or ''}`",
-                f"- Reasoning effort / 推論強度: `{row.get('reasoning_effort') or ''}`",
-                f"- Personality / 性格: `{row.get('personality') or ''}`",
-                f"- Collaboration mode / 協調モード: `{row.get('collaboration_mode') or ''}`",
-                f"- Observed count / 観測回数: `{row.get('observed_count') or 0}`",
-                "",
-            ]
-        )
-
-
-def _append_client_runtime_section(lines: list[str], rows: list[dict[str, Any]]) -> None:
-    lines.extend(["## Client runtimes / クライアント実行環境", ""])
-    if not rows:
-        lines.extend(["No client runtime observations were captured. 観測されたクライアント実行環境はありません。", ""])
-        return
-
-    for row in rows:
-        lines.extend(
-            [
-                f"### {row['id']}",
-                "",
-                f"- First observed at / 最初の観測時刻: `{row.get('first_observed_at') or ''}`",
-                f"- CLI version / CLI バージョン: `{row.get('cli_version') or ''}`",
-                f"- Originator / 起点: `{row.get('originator') or ''}`",
-                f"- Source / ソース: `{row.get('source') or ''}`",
-                f"- Model provider / モデル提供元: `{row.get('model_provider') or ''}`",
-                f"- Observed count / 観測回数: `{row.get('observed_count') or 0}`",
-                "",
-            ]
-        )
