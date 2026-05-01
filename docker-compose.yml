@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
+    entrypoint: ["sleep", "infinity"]
     environment:
       TIMELINE_FOR_WINDOWS_CODEX_RUNTIME: docker
       TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json

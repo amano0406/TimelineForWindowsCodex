@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
             "\n".join(
                 [
                     "Host direct execution is disabled for normal operation.",
-                    "Use Docker Compose instead, for example: docker compose run --rm worker settings status",
+                    "Use the repository launcher instead, for example: .\\cli.ps1 settings status",
                     f"For automated tests only, set {ALLOW_HOST_RUN_ENV}=1.",
                 ]
             ),

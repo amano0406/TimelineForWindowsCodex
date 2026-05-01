@@ -42,7 +42,7 @@ class WorkerCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("Host direct execution is disabled", stderr.getvalue())
-        self.assertIn("docker compose run --rm worker", stderr.getvalue())
+        self.assertIn(".\\cli.ps1 settings status", stderr.getvalue())
 
     def test_runtime_paths_default_settings_path_is_repo_root(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -133,18 +133,18 @@ class WorkerCliTests(unittest.TestCase):
             archive_path = Path(payload["download"]["destination_path"])
             self.assertTrue(archive_path.exists())
             self.assertEqual(payload["master_root"], str(outputs_root.resolve()))
-            self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "thread.json").exists())
+            self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "timeline.json").exists())
             self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "convert_info.json").exists())
 
             with ZipFile(archive_path) as archive:
                 names = set(archive.namelist())
-                first_thread = json.loads(archive.read(f"items/{FIXTURE_THREAD_ID}/thread.json").decode("utf-8"))
+                first_thread = json.loads(archive.read(f"items/{FIXTURE_THREAD_ID}/timeline.json").decode("utf-8"))
                 first_convert = json.loads(archive.read(f"items/{FIXTURE_THREAD_ID}/convert_info.json").decode("utf-8"))
 
             self.assertIn("README.md", names)
-            self.assertIn(f"items/{FIXTURE_THREAD_ID}/thread.json", names)
+            self.assertIn(f"items/{FIXTURE_THREAD_ID}/timeline.json", names)
             self.assertIn(f"items/{FIXTURE_THREAD_ID}/convert_info.json", names)
-            self.assertIn(f"items/{ARCHIVED_THREAD_ID}/thread.json", names)
+            self.assertIn(f"items/{ARCHIVED_THREAD_ID}/timeline.json", names)
             self.assertIn(f"items/{ARCHIVED_THREAD_ID}/convert_info.json", names)
             self.assertNotIn("readme.html", names)
             self.assertNotIn("status.json", names)
@@ -193,7 +193,7 @@ class WorkerCliTests(unittest.TestCase):
             self.assertEqual(first_exit_code, 0)
             first_payload = json.loads(first_stdout)
             self.assertEqual(first_payload["master_root"], str(outputs_root.resolve()))
-            self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "thread.json").exists())
+            self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "timeline.json").exists())
             self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "convert_info.json").exists())
             self.assertEqual(first_payload["processing_mode"], "full_rebuild")
             self.assertEqual(first_payload["rendered_thread_count"], 1)
@@ -258,7 +258,7 @@ class WorkerCliTests(unittest.TestCase):
             self.assertTrue(destination_path.exists())
             with ZipFile(destination_path) as archive:
                 names = set(archive.namelist())
-            self.assertIn(f"items/{FIXTURE_THREAD_ID}/thread.json", names)
+            self.assertIn(f"items/{FIXTURE_THREAD_ID}/timeline.json", names)
             self.assertIn(f"items/{FIXTURE_THREAD_ID}/convert_info.json", names)
 
             handoff_root = temp_root / "handoff"
@@ -301,9 +301,9 @@ class WorkerCliTests(unittest.TestCase):
             with ZipFile(single_payload["download"]["destination_path"]) as archive:
                 names = set(archive.namelist())
             self.assertIn("README.md", names)
-            self.assertIn(f"items/{FIXTURE_THREAD_ID}/thread.json", names)
+            self.assertIn(f"items/{FIXTURE_THREAD_ID}/timeline.json", names)
             self.assertIn(f"items/{FIXTURE_THREAD_ID}/convert_info.json", names)
-            self.assertNotIn(f"items/{ARCHIVED_THREAD_ID}/thread.json", names)
+            self.assertNotIn(f"items/{ARCHIVED_THREAD_ID}/timeline.json", names)
             self.assertNotIn(f"items/{ARCHIVED_THREAD_ID}/convert_info.json", names)
             self.assertNotIn("status.json", names)
 
@@ -340,9 +340,9 @@ class WorkerCliTests(unittest.TestCase):
             with ZipFile(multi_download_payload["destination_path"]) as archive:
                 names = set(archive.namelist())
             self.assertIn("README.md", names)
-            self.assertIn(f"items/{FIXTURE_THREAD_ID}/thread.json", names)
+            self.assertIn(f"items/{FIXTURE_THREAD_ID}/timeline.json", names)
             self.assertIn(f"items/{FIXTURE_THREAD_ID}/convert_info.json", names)
-            self.assertIn(f"items/{ARCHIVED_THREAD_ID}/thread.json", names)
+            self.assertIn(f"items/{ARCHIVED_THREAD_ID}/timeline.json", names)
             self.assertIn(f"items/{ARCHIVED_THREAD_ID}/convert_info.json", names)
             self.assertNotIn("status.json", names)
 

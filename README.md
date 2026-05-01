@@ -11,7 +11,7 @@ This product is CLI-only. There is no Web UI. The main job is to keep a fixed ma
 - Reads one or more configured Codex history source roots.
 - Discovers threads from `sessions/**/*.jsonl`, `session_index.jsonl`, archived `thread_reads`, and `state_5.sqlite` fallback metadata.
 - Writes one master directory per thread.
-- Stores normalized conversation text in `thread.json`.
+- Stores normalized conversation text in `timeline.json`.
 - Stores source/conversion metadata in `convert_info.json`.
 - Skips unchanged thread output when the source and conversion settings have not changed.
 - Builds timestamped download ZIP files on demand.
@@ -26,7 +26,7 @@ This product is CLI-only. There is no Web UI. The main job is to keep a fixed ma
 - It does not treat `state_5.sqlite` as the primary transcript source.
 - It does not export binary attachment contents.
 - It does not reconstruct exact custom-instruction save timestamps.
-- It does not export tool-call details, terminal output, reasoning summaries, or fine-grained file diffs into `thread.json`.
+- It does not export tool-call details, terminal output, reasoning summaries, or fine-grained file diffs into `timeline.json`.
 
 ## Settings
 
@@ -44,7 +44,7 @@ The settings file contains:
 - `outputs_root`: the fixed master artifact directory
 - `redaction_profile`: `strict` or `loose`
 - `include_archived_sources`: whether archived thread reads are included
-- `include_tool_outputs`: kept for compatibility, but normal `thread.json` does not include tool-output logs
+- `include_tool_outputs`: kept for compatibility, but normal `timeline.json` does not include tool-output logs
 - `include_compaction_recovery`: optional deep recovery from compaction `replacement_history`
 
 ## Output Contract
@@ -55,7 +55,7 @@ Master output:
 <masterPath>/
   <thread_id>/
     convert_info.json
-    thread.json
+    timeline.json
 ```
 
 Download ZIP:
@@ -65,10 +65,10 @@ README.md
 items/
   <thread_id>/
     convert_info.json
-    thread.json
+    timeline.json
 ```
 
-`thread.json` is the final normalized conversation item:
+`timeline.json` is the final normalized conversation item:
 
 ```json
 {
@@ -120,15 +120,30 @@ Notes:
 
 ## Docker Compose
 
-Docker Compose runs the Python worker CLI only when `cli.ps1` invokes it. This product does not use a persistent worker container and does not expose a browser UI.
+Docker Compose keeps one project service container, `timeline-for-windows-codex-worker-1`, and `cli.ps1` executes commands inside it with `docker compose exec`. CLI commands should not create `worker-run-*` one-off containers. This product does not expose a browser UI.
 
 ```powershell
 cp .env.example .env
+.\start.ps1
 .\cli.ps1 settings status
 .\cli.ps1 items refresh --json
 ```
 
 Source mounts are read-only. `settings.json` is mounted into the container as `/shared/app-data/settings.json` and survives container rebuilds because it lives in the repo root.
+
+Stop the worker service container:
+
+```powershell
+.\stop.ps1
+```
+
+Uninstall Docker resources:
+
+```powershell
+.\uninstall.ps1
+```
+
+The uninstall script does not delete Codex source history, `outputs`, or `downloads`. It asks separately before deleting the app-data Docker volume or local `settings.json`.
 
 ## Testing
 

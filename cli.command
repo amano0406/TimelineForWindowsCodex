@@ -20,7 +20,12 @@ fi
 
 mkdir -p .docker
 if command -v flock >/dev/null 2>&1; then
-  flock .docker/docker-compose.lock docker compose run --rm worker "$@"
+  flock .docker/docker-compose.lock bash -c '
+    set -euo pipefail
+    docker compose up -d --build worker >/dev/null
+    docker compose exec -T worker python -m timeline_for_windows_codex_worker "$@"
+  ' bash "$@"
 else
-  docker compose run --rm worker "$@"
+  docker compose up -d --build worker >/dev/null
+  docker compose exec -T worker python -m timeline_for_windows_codex_worker "$@"
 fi

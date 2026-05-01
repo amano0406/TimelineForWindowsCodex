@@ -1,8 +1,5 @@
 [CmdletBinding()]
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$CliArgs
-)
+param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -27,19 +24,6 @@ function Initialize-TfwcSettingsFile {
     }
 }
 
-function Show-TfwcUsage {
-    Write-Host "TimelineForWindowsCodex CLI"
-    Write-Host ""
-    Write-Host "Usage:"
-    Write-Host "  .\cli.ps1 settings status"
-    Write-Host "  .\cli.ps1 settings init"
-    Write-Host "  .\cli.ps1 settings inputs list"
-    Write-Host "  .\cli.ps1 settings master show"
-    Write-Host "  .\cli.ps1 items list --json"
-    Write-Host "  .\cli.ps1 items refresh --json"
-    Write-Host "  .\cli.ps1 items download --to /shared/downloads"
-}
-
 function Get-TfwcLastExitCode {
     $variable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
     if ($variable -and $null -ne $variable.Value) {
@@ -49,22 +33,6 @@ function Get-TfwcLastExitCode {
     return 1
 }
 
-function Start-TfwcWorker {
-    param([Parameter(Mandatory = $true)][string]$Docker)
-
-    $composeOutput = & $Docker compose up -d --build worker 2>&1
-    $composeExitCode = Get-TfwcLastExitCode
-    if ($composeExitCode -ne 0) {
-        $composeOutput | ForEach-Object { Write-Error $_ }
-        exit $composeExitCode
-    }
-}
-
-if ($null -eq $CliArgs -or $CliArgs.Count -eq 0) {
-    Show-TfwcUsage
-    exit 0
-}
-
 Initialize-TfwcSettingsFile
 $docker = Get-TfwcDockerCommand
 & $docker info *> $null
@@ -72,6 +40,17 @@ if (-not $?) {
     throw "Docker Desktop is installed but the Docker engine is not ready."
 }
 
-Start-TfwcWorker -Docker $docker
-& $docker compose exec -T worker python -m timeline_for_windows_codex_worker @CliArgs
+Write-Host "Starting TimelineForWindowsCodex worker..."
+& $docker compose up -d --build worker
+if (-not $?) { throw "docker compose failed." }
+
+Write-Host ""
+Write-Host "TimelineForWindowsCodex worker-1 was started."
+Write-Host "CLI commands execute inside this persistent Compose service container."
+Write-Host ""
+Write-Host "CLI examples:"
+Write-Host "  .\cli.ps1 settings status"
+Write-Host "  .\cli.ps1 items list --json"
+Write-Host "  .\cli.ps1 items refresh --json"
+Write-Host "  .\cli.ps1 items download --to /shared/downloads"
 exit (Get-TfwcLastExitCode)

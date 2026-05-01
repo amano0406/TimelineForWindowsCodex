@@ -64,9 +64,24 @@ def main(argv: list[str] | None = None) -> int:
     download_dir = temp_root / "downloads"
     for directory in (settings_dir, appdata_dir, output_dir, ignored_outputs_dir, download_dir):
         directory.mkdir(parents=True, exist_ok=True)
+    compose_file = temp_root / "docker-compose.smoke.yml"
+    project_name = f"tfwc-smoke-{temp_root.name.lower()}"
 
     try:
         source_mounts = _build_source_mounts(source_roots)
+        _write_smoke_compose_file(
+            compose_file=compose_file,
+            settings_dir=settings_dir,
+            appdata_dir=appdata_dir,
+            output_dir=output_dir,
+            ignored_outputs_dir=ignored_outputs_dir,
+            download_dir=download_dir,
+            source_mounts=source_mounts,
+        )
+        _run_compose_process(
+            [*_compose_base_command(compose_file, project_name), "up", "-d", "--build", "worker"],
+            capture_json=False,
+        )
         for source_mount in source_mounts:
             _run_compose_json(
                 [
@@ -83,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
                 ignored_outputs_dir=ignored_outputs_dir,
                 download_dir=download_dir,
                 source_mounts=source_mounts,
+                compose_file=compose_file,
+                project_name=project_name,
             )
 
         _run_compose_json(
@@ -100,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
             ignored_outputs_dir=ignored_outputs_dir,
             download_dir=download_dir,
             source_mounts=source_mounts,
+            compose_file=compose_file,
+            project_name=project_name,
         )
 
         refresh_payloads: list[dict[str, Any]] = []
@@ -119,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
                 ignored_outputs_dir=ignored_outputs_dir,
                 download_dir=download_dir,
                 source_mounts=source_mounts,
+                compose_file=compose_file,
+                project_name=project_name,
             )
             refresh_payloads.append(refresh_payload)
             inspections.append(_inspect_refresh(refresh_payload, output_dir, download_dir))
@@ -137,6 +158,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
     finally:
+        if compose_file.exists():
+            _run_compose_process(
+                [*_compose_base_command(compose_file, project_name), "down", "--remove-orphans", "-v"],
+                capture_json=False,
+                check=False,
+            )
         if not args.preserve_output:
             shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -170,42 +197,20 @@ def _run_compose_json(
     ignored_outputs_dir: Path,
     download_dir: Path,
     source_mounts: list[SourceMount],
+    compose_file: Path,
+    project_name: str,
 ) -> dict[str, Any]:
     compose_command = [
-        "docker",
-        "compose",
-        "run",
-        "--rm",
-        "--no-deps",
-        "-e",
-        f"TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH={CONTAINER_SETTINGS_DIR / 'settings.json'}",
-        "-e",
-        f"TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT={CONTAINER_APPDATA_DIR}",
-        "-e",
-        f"TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT={CONTAINER_IGNORED_OUTPUTS_DIR}",
-        "-v",
-        f"{settings_dir}:{CONTAINER_SETTINGS_DIR}",
-        "-v",
-        f"{appdata_dir}:{CONTAINER_APPDATA_DIR}",
-        "-v",
-        f"{output_dir}:{CONTAINER_OUTPUT_DIR}",
-        "-v",
-        f"{ignored_outputs_dir}:{CONTAINER_IGNORED_OUTPUTS_DIR}",
-        "-v",
-        f"{download_dir}:{CONTAINER_DOWNLOAD_DIR}",
+        *_compose_base_command(compose_file, project_name),
+        "exec",
+        "-T",
+        "worker",
+        "python",
+        "-m",
+        "timeline_for_windows_codex_worker",
+        *command,
     ]
-    for source_mount in source_mounts:
-        compose_command.extend(["-v", f"{source_mount.host_path}:{source_mount.container_path}:ro"])
-    compose_command.extend(["worker", *command])
-
-    completed = subprocess.run(
-        compose_command,
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
+    completed = _run_compose_process(compose_command, capture_json=True)
     if completed.returncode != 0:
         raise RuntimeError(
             "\n".join(
@@ -220,20 +225,111 @@ def _run_compose_json(
     return json.loads(completed.stdout)
 
 
+def _write_smoke_compose_file(
+    *,
+    compose_file: Path,
+    settings_dir: Path,
+    appdata_dir: Path,
+    output_dir: Path,
+    ignored_outputs_dir: Path,
+    download_dir: Path,
+    source_mounts: list[SourceMount],
+) -> None:
+    volume_lines = [
+        f"      - {_quoted_volume(settings_dir, CONTAINER_SETTINGS_DIR)}",
+        f"      - {_quoted_volume(appdata_dir, CONTAINER_APPDATA_DIR)}",
+        f"      - {_quoted_volume(output_dir, CONTAINER_OUTPUT_DIR)}",
+        f"      - {_quoted_volume(ignored_outputs_dir, CONTAINER_IGNORED_OUTPUTS_DIR)}",
+        f"      - {_quoted_volume(download_dir, CONTAINER_DOWNLOAD_DIR)}",
+    ]
+    for source_mount in source_mounts:
+        volume_lines.append(f"      - {_quoted_volume(source_mount.host_path, source_mount.container_path, read_only=True)}")
+
+    compose_file.write_text(
+        "\n".join(
+            [
+                "services:",
+                "  worker:",
+                "    build:",
+                f"      context: {_yaml_string(REPO_ROOT)}",
+                f"      dockerfile: {_yaml_string('docker/worker.Dockerfile')}",
+                "    entrypoint: [\"sleep\", \"infinity\"]",
+                "    environment:",
+                "      TIMELINE_FOR_WINDOWS_CODEX_RUNTIME: docker",
+                f"      TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS: {_yaml_string('/app/config/runtime.defaults.json')}",
+                f"      TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH: {_yaml_string(CONTAINER_SETTINGS_DIR / 'settings.json')}",
+                f"      TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT: {_yaml_string(CONTAINER_APPDATA_DIR)}",
+                f"      TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT: {_yaml_string(CONTAINER_IGNORED_OUTPUTS_DIR)}",
+                "    volumes:",
+                *volume_lines,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _compose_base_command(compose_file: Path, project_name: str) -> list[str]:
+    return ["docker", "compose", "-p", project_name, "-f", str(compose_file)]
+
+
+def _run_compose_process(
+    command: list[str],
+    *,
+    capture_json: bool,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if check and completed.returncode != 0:
+        raise RuntimeError(
+            "\n".join(
+                [
+                    f"Command failed: {' '.join(command)}",
+                    f"exit_code: {completed.returncode}",
+                    f"stdout: {completed.stdout}",
+                    f"stderr: {completed.stderr}",
+                ]
+            )
+        )
+    if capture_json:
+        return completed
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    return completed
+
+
+def _quoted_volume(host_path: Path, container_path: PurePosixPath, *, read_only: bool = False) -> str:
+    suffix = ":ro" if read_only else ""
+    return _yaml_string(f"{host_path}:{container_path}{suffix}")
+
+
+def _yaml_string(value: object) -> str:
+    return json.dumps(str(value))
+
+
 def _inspect_refresh(payload: dict[str, Any], output_dir: Path, download_dir: Path) -> dict[str, Any]:
     master_root = _container_output_path_to_host(str(payload.get("master_root") or ""), output_dir)
     download = payload.get("download") if isinstance(payload.get("download"), dict) else {}
     archive_path = _container_download_path_to_host(str(download.get("destination_path") or ""), download_dir)
-    master_thread_json_count = len(list(master_root.glob("*/thread.json")))
+    master_timeline_json_count = len(list(master_root.glob("*/timeline.json")))
     master_convert_info_count = len(list(master_root.glob("*/convert_info.json")))
 
     with ZipFile(archive_path) as archive:
         names = set(archive.namelist())
-        thread_json_count = len(
+        timeline_json_count = len(
             [
                 name
                 for name in names
-                if name.endswith("/thread.json")
+                if name.endswith("/timeline.json")
             ]
         )
         convert_json_count = len([name for name in names if name.endswith("/convert_info.json")])
@@ -250,10 +346,10 @@ def _inspect_refresh(payload: dict[str, Any], output_dir: Path, download_dir: Pa
         "processing_mode": payload.get("processing_mode"),
         "reused_thread_count": payload.get("reused_thread_count"),
         "rendered_thread_count": payload.get("rendered_thread_count"),
-        "master_thread_json_count": master_thread_json_count,
+        "master_timeline_json_count": master_timeline_json_count,
         "master_convert_info_count": master_convert_info_count,
         "missing_zip_entries": missing_zip_entries,
-        "zip_thread_json_count": thread_json_count,
+        "zip_timeline_json_count": timeline_json_count,
         "zip_convert_json_count": convert_json_count,
     }
 
@@ -283,12 +379,12 @@ def _assert_valid(
             raise AssertionError(f"ZIP is missing required files: {inspection}")
         if int(inspection.get("thread_count") or 0) <= 0:
             raise AssertionError(f"No threads were exported: {inspection}")
-        if inspection.get("master_thread_json_count") != inspection.get("thread_count"):
-            raise AssertionError(f"Master thread JSON count mismatch: {inspection}")
+        if inspection.get("master_timeline_json_count") != inspection.get("thread_count"):
+            raise AssertionError(f"Master timeline JSON count mismatch: {inspection}")
         if inspection.get("master_convert_info_count") != inspection.get("thread_count"):
             raise AssertionError(f"Master convert_info JSON count mismatch: {inspection}")
-        if inspection.get("zip_thread_json_count") != inspection.get("thread_count"):
-            raise AssertionError(f"Thread JSON count mismatch: {inspection}")
+        if inspection.get("zip_timeline_json_count") != inspection.get("thread_count"):
+            raise AssertionError(f"Timeline JSON count mismatch: {inspection}")
         if inspection.get("zip_convert_json_count") != inspection.get("thread_count"):
             raise AssertionError(f"Convert JSON count mismatch: {inspection}")
 

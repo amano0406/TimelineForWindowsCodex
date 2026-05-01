@@ -6,7 +6,7 @@ from .contracts import ThreadSelection
 
 THREAD_CONVERT_INFO_FILE_NAME = "convert_info.json"
 THREAD_CONVERT_FILE_NAME = THREAD_CONVERT_INFO_FILE_NAME
-THREAD_FINAL_FILE_NAME = "thread.json"
+THREAD_FINAL_FILE_NAME = "timeline.json"
 
 
 def export_thread_dir_name(thread_id: str) -> str:

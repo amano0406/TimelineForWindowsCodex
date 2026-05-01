@@ -22,7 +22,7 @@ from .timeline import (
 )
 
 PARSER_VERSION = 2
-RENDER_CONTRACT_VERSION = 3
+RENDER_CONTRACT_VERSION = 4
 THREAD_CACHE_SCHEMA_VERSION = 2
 
 
@@ -106,18 +106,19 @@ def refresh_thread_item(
     cache_key = build_thread_cache_key(request, thread, source_fingerprint)
     export_thread_dir = export_thread_dir_name(thread.thread_id)
     item_dir = ensure_dir(outputs_root / export_thread_dir)
-    thread_path = item_dir / THREAD_FINAL_FILE_NAME
+    timeline_path = item_dir / THREAD_FINAL_FILE_NAME
     convert_path = item_dir / THREAD_CONVERT_FILE_NAME
     legacy_convert_path = item_dir / "convert.json"
-    existed_before = thread_path.exists() or convert_path.exists()
+    legacy_thread_path = item_dir / "thread.json"
+    existed_before = timeline_path.exists() or convert_path.exists() or legacy_thread_path.exists()
 
     existing_convert = _read_optional_json(convert_path)
     if (
         _convert_cache_key(existing_convert) == cache_key
-        and thread_path.exists()
+        and timeline_path.exists()
         and convert_path.exists()
     ):
-        thread_payload = read_json(thread_path)
+        thread_payload = read_json(timeline_path)
         return {
             "thread_id": thread.thread_id,
             "title": _payload_title(thread_payload, thread),
@@ -127,7 +128,7 @@ def refresh_thread_item(
             "source_session_path": str(resolved_session_path) if resolved_session_path is not None else "",
             "message_count": _message_count(existing_convert, thread_payload),
             "attachment_count": _attachment_count(existing_convert, thread_payload),
-            "thread_path": str(thread_path),
+            "timeline_path": str(timeline_path),
             "convert_info_path": str(convert_path),
             "cache_key": cache_key,
         }
@@ -157,12 +158,14 @@ def refresh_thread_item(
         render_contract_version=RENDER_CONTRACT_VERSION,
     )
     convert_payload["converted_at"] = converted_at
-    convert_payload["thread_path"] = str(thread_path)
+    convert_payload["timeline_path"] = str(timeline_path)
 
-    write_json_atomic(thread_path, thread_payload)
+    write_json_atomic(timeline_path, thread_payload)
     write_json_atomic(convert_path, convert_payload)
     if legacy_convert_path.exists() and legacy_convert_path != convert_path:
         legacy_convert_path.unlink()
+    if legacy_thread_path.exists() and legacy_thread_path != timeline_path:
+        legacy_thread_path.unlink()
 
     status = "changed" if existed_before else "new"
     return {
@@ -174,7 +177,7 @@ def refresh_thread_item(
         "source_session_path": str(resolved_session_path) if resolved_session_path is not None else "",
         "message_count": len(transcript_entries),
         "attachment_count": _attachment_count(convert_payload, thread_payload),
-        "thread_path": str(thread_path),
+        "timeline_path": str(timeline_path),
         "convert_info_path": str(convert_path),
         "cache_key": cache_key,
         "known_gaps": limitations,
@@ -203,7 +206,7 @@ def build_download_archive(
         for row in rows:
             item_dir_name = str(row["item_dir_name"])
             archive.write(Path(str(row["convert_info_path"])), f"items/{item_dir_name}/{THREAD_CONVERT_FILE_NAME}")
-            archive.write(Path(str(row["thread_path"])), f"items/{item_dir_name}/{THREAD_FINAL_FILE_NAME}")
+            archive.write(Path(str(row["timeline_path"])), f"items/{item_dir_name}/{THREAD_FINAL_FILE_NAME}")
 
     return {
         "schema_version": 1,
@@ -231,14 +234,14 @@ def collect_master_items(outputs_root: Path, selected_item_ids: list[str] | None
     rows: list[dict[str, object]] = []
     for item_dir in sorted(path for path in outputs_root.iterdir() if path.is_dir()):
         convert_path = item_dir / THREAD_CONVERT_FILE_NAME
-        thread_path = item_dir / THREAD_FINAL_FILE_NAME
-        if not convert_path.exists() or not thread_path.exists():
+        timeline_path = item_dir / THREAD_FINAL_FILE_NAME
+        if not convert_path.exists() or not timeline_path.exists():
             continue
         payload = _read_optional_json(convert_path)
         thread_id = str(payload.get("thread_id") or item_dir.name)
         if normalized_selection and thread_id.casefold() not in normalized_selection and item_dir.name.casefold() not in normalized_selection:
             continue
-        thread_payload = _read_optional_json(thread_path)
+        thread_payload = _read_optional_json(timeline_path)
         rows.append(
             {
                 "thread_id": thread_id,
@@ -247,7 +250,7 @@ def collect_master_items(outputs_root: Path, selected_item_ids: list[str] | None
                 "message_count": _message_count(payload, thread_payload),
                 "attachment_count": _attachment_count(payload, thread_payload),
                 "convert_info_path": str(convert_path),
-                "thread_path": str(thread_path),
+                "timeline_path": str(timeline_path),
             }
         )
 
@@ -275,7 +278,7 @@ def render_download_readme(rows: list[dict[str, object]]) -> str:
             "## Layout",
             "",
             "- `items/<thread_id>/convert_info.json`: conversion metadata",
-            "- `items/<thread_id>/thread.json`: normalized user/assistant/system messages",
+            "- `items/<thread_id>/timeline.json`: normalized user/assistant/system messages",
             "",
         ]
     )

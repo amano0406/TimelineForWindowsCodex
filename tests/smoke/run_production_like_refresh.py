@@ -171,16 +171,16 @@ def _inspect_refresh(payload: dict[str, Any]) -> dict[str, Any]:
     master_root = Path(str(payload.get("master_root") or ""))
     download = payload.get("download") if isinstance(payload.get("download"), dict) else {}
     archive_path = Path(str(download.get("destination_path") or ""))
-    master_thread_json_count = len(list(master_root.glob("*/thread.json")))
+    master_timeline_json_count = len(list(master_root.glob("*/timeline.json")))
     master_convert_info_count = len(list(master_root.glob("*/convert_info.json")))
 
     with ZipFile(archive_path) as archive:
         names = set(archive.namelist())
-        thread_json_count = len(
+        timeline_json_count = len(
             [
                 name
                 for name in names
-                if name.endswith("/thread.json")
+                if name.endswith("/timeline.json")
             ]
         )
         convert_json_count = len([name for name in names if name.endswith("/convert_info.json")])
@@ -197,10 +197,10 @@ def _inspect_refresh(payload: dict[str, Any]) -> dict[str, Any]:
         "processing_mode": payload.get("processing_mode"),
         "reused_thread_count": payload.get("reused_thread_count"),
         "rendered_thread_count": payload.get("rendered_thread_count"),
-        "master_thread_json_count": master_thread_json_count,
+        "master_timeline_json_count": master_timeline_json_count,
         "master_convert_info_count": master_convert_info_count,
         "missing_zip_entries": missing_zip_entries,
-        "zip_thread_json_count": thread_json_count,
+        "zip_timeline_json_count": timeline_json_count,
         "zip_convert_json_count": convert_json_count,
     }
 
@@ -216,12 +216,12 @@ def _assert_valid(
             raise AssertionError(f"ZIP is missing required files: {inspection}")
         if int(inspection.get("thread_count") or 0) <= 0:
             raise AssertionError(f"No threads were exported: {inspection}")
-        if inspection.get("master_thread_json_count") != inspection.get("thread_count"):
-            raise AssertionError(f"Master thread JSON count mismatch: {inspection}")
+        if inspection.get("master_timeline_json_count") != inspection.get("thread_count"):
+            raise AssertionError(f"Master timeline JSON count mismatch: {inspection}")
         if inspection.get("master_convert_info_count") != inspection.get("thread_count"):
             raise AssertionError(f"Master convert_info JSON count mismatch: {inspection}")
-        if inspection.get("zip_thread_json_count") != inspection.get("thread_count"):
-            raise AssertionError(f"Thread JSON count mismatch: {inspection}")
+        if inspection.get("zip_timeline_json_count") != inspection.get("thread_count"):
+            raise AssertionError(f"Timeline JSON count mismatch: {inspection}")
         if inspection.get("zip_convert_json_count") != inspection.get("thread_count"):
             raise AssertionError(f"Convert JSON count mismatch: {inspection}")
 
