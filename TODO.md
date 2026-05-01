@@ -8,7 +8,7 @@
 - Web UI は製品責務から外す。
 - source transcript data は削除・上書き・大量移動しない。
 - export contract は維持する。
-- 通常運用は固定 settings と `refresh` を主導線にする。
+- 通常運用は固定 settings と `items refresh` を主導線にする。
 - 複数入力ディレクトリと固定出力先を settings で管理する。
 - 通常実行は Docker Compose 経由に限定する。
 - Windows 利用者向けの正面玄関は PowerShell とする。
@@ -16,27 +16,31 @@
 
 ## A. プロダクトの使命
 
-- [x] Windows 版 Codex のローカル履歴を、LLM に渡しやすい ZIP / Markdown / JSON 系成果物へ変換できる
+- [x] Windows 版 Codex のローカル履歴を、LLM に渡しやすい ZIP / JSON 系成果物へ変換できる
 - [x] 主目的を「raw に近い会話保存」に置いている
 - [x] 主単位を merged global timeline ではなく thread にしている
 - [x] Web UI なしで CLI から実行できる
 
 ## B. 会話の原文保持
 
-- [x] ユーザー発話とアシスタント発話の連鎖を thread ごとに保持できる
+- [x] ユーザー発話、アシスタント発話、thread ローカル system 情報の連鎖を thread ごとに保持できる
 - [x] 各発話に日時を保持できる
 - [x] source に mode 情報がある場合は保持できる
 - [x] source に添付情報がある場合は、添付ファイル名またはラベルを保持できる
 - [x] 非テキスト添付は、まずファイル名またはラベルとして扱う方針になっている
+- [x] 任意指定時に圧縮履歴の `replacement_history` から user / assistant message を復元できる
+- [x] 通常の `thread.json` には tool call / terminal output / reasoning summary を混ぜない
 
 ## C. Thread 単位の出力契約
 
-- [x] thread ごとに独立した markdown を生成できる
-- [x] export 上の thread ファイル名を `threads/<thread_id>.md` に固定している
-- [x] `readme.html` を入口として生成できる
-- [x] `threads/index.md` を生成できる
+- [x] master root 直下に `<thread_id>/` を作成できる
+- [x] thread ごとに独立した `<thread_id>/thread.json` を生成できる
+- [x] thread ごとに独立した `<thread_id>/convert.json` を生成できる
+- [x] export ルートに `README.md` を生成できる
+- [x] `readme.html` / `threads/index.md` / `threads/<thread_id>.md` を通常 ZIP から外している
 - [x] 単一 / 複数 / 全 thread の選択を前提にした出力契約になっている
 - [x] ZIP にまとめて配布できる
+- [x] 日付絞り込みをこの製品の責務から外している
 
 ## D. Thread 名の扱い
 
@@ -52,7 +56,7 @@
 - [x] カスタム指示、モデル設定、client runtime を environment ledger に集約できる
 - [x] 環境情報を重複除去して ledger 化できる
 - [x] カスタム指示の時刻は「実保存時刻」ではなく「観測時点」として扱う実装になっている
-- [x] thread 側から environment ledger への参照導線を持っている
+- [x] environment ledger は run directory の診断情報として分離している
 
 ## F. 入力源
 
@@ -64,13 +68,13 @@
 
 ## G. 実行面
 
-- [x] CLI で `discover / create-job / run / refresh / settings / list-jobs / show-job / process-job / daemon` を持っている
-- [x] CLI で最新成果物を確認する `current` を持っている
-- [x] CLI で最新ZIPを指定先へコピーする `export-current` を持っている
-- [x] CLI で refresh から ZIP コピーまで行う `handoff` を持っている
-- [x] CLI で thread id 指定なしなら全 thread 対象にできる
-- [x] CLI で thread id を複数指定できる
-- [x] Docker Compose は worker daemon のみを起動する
+- [x] CLI で `settings / items / runs` の通常コマンド群を持っている
+- [x] CLI で読み取り対象を確認する `items list` を持っている
+- [x] CLI で最新ZIPを指定先へコピーする `items download` を持っている
+- [x] CLI で refresh から ZIP コピーまで行う `items refresh --download-to` を持っている
+- [x] CLI で item id 指定なしなら全 thread 対象にできる
+- [x] CLI で item id を複数指定できる
+- [x] Docker Compose は worker CLI を起動する
 - [x] Web UI 実装を削除済み
 - [x] 複数 source root を settings に保存できる
 - [x] output root を settings に保存できる
@@ -84,15 +88,14 @@
 - [x] PowerShell wrapper から Docker Compose 経由で CLI を実行できる
 - [x] WSL / host shell は自動テスト・開発検証用の裏口として扱う方針を明記している
 - [x] `settings init` で通常設定を初期化できる
-- [x] `refresh` で settings の source root / output root を使える
-- [x] `settings validate` で source root と output root の状態を確認できる
+- [x] `items refresh` で settings の source root / output root を使える
 - [x] 変化していない thread は前回成果物を再利用できる
 - [x] ZIP ファイル名に run id 由来の日時情報を含められる
 
 ## H. 出力内容の説明責任
 
-- [x] export `readme.html` 上で「何が含まれるか」を説明している
-- [x] export `readme.html` 上で「既知の欠損・未収録」を説明している
+- [x] export `README.md` 上で「何が含まれるか」を説明している
+- [x] run directory の `fidelity_report.*` 上で「既知の欠損・未収録」を説明している
 - [x] run ごとの missing source や fidelity gap を明示する専用レポートを生成できる
 - [x] `catalog.json` と `update_manifest.json` を生成できる
 - [x] `processing_profile.json` で重い thread を確認できる
@@ -101,18 +104,17 @@
 ## I. 動作確認
 
 - [x] worker integration tests がある
-- [x] CLI `discover` の fixture 確認がある
-- [x] CLI `run` の単一 / 複数 / 全 thread export 確認がある
-- [x] CLI `list-jobs` / `show-job` 確認がある
-- [x] CLI `settings` / `refresh` の fixture 確認がある
-- [x] CLI `settings init` / `current` / `export-current` の fixture 確認がある
-- [x] CLI `handoff` の fixture 確認がある
-- [x] CLI `settings show` / `refresh --help` の実行確認がある
-- [x] CLI `settings validate` の fixture 確認がある
-- [x] PowerShell wrapper の `help` / `settings show` 実行確認がある
+- [x] CLI `items list` の fixture 確認がある
+- [x] CLI `items refresh` の単一 / 複数 / 全 thread export 確認がある
+- [x] CLI `runs list` / `runs show` 確認がある
+- [x] CLI `settings` / `items refresh` の fixture 確認がある
+- [x] CLI `settings init` / `items download` の fixture 確認がある
+- [x] CLI `items refresh --download-to` の fixture 確認がある
+- [x] CLI `settings status` / `items refresh --help` の実行確認がある
+- [x] PowerShell wrapper の `help` / `settings status` 実行確認がある
 - [x] 本物の `.codex` を一時出力先で読む production-like smoke test がある
 - [x] Docker Compose 経由で本物の `.codex` を一時出力先で読む production-like smoke test がある
-- [x] ZIP に `readme.html`, `threads/index.md`, `threads/<thread_id>.md`, `environment/*`, `fidelity_report.*` が入ることを確認している
+- [x] ZIP に `README.md` と `<thread_id>/convert.json` / `<thread_id>/thread.json` が入ることを確認している
 
 ## J. まだ未実装の大枠項目
 

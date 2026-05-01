@@ -1,6 +1,8 @@
 # TimelineForWindowsCodex
 
-`TimelineForWindowsCodex` converts local Codex Desktop history on Windows into Markdown, JSON, environment ledger files, fidelity reports, and ZIP packages.
+`TimelineForWindowsCodex` converts local Codex Desktop history on Windows into per-thread master artifacts, diagnostics, and ZIP handoff packages.
+
+Japanese README: [README.ja.md](README.ja.md)
 
 This product is CLI-only. There is no Web UI. The main use case is to refresh configured local Codex history sources and create a reliable export package that can be read later or handed to another LLM.
 
@@ -8,11 +10,13 @@ This product is CLI-only. There is no Web UI. The main use case is to refresh co
 
 - Reads local Codex history from one or more configured source roots.
 - Discovers threads from `session_index.jsonl`, `sessions/**/*.jsonl`, archived `thread_reads`, and `state_5.sqlite` fallback metadata.
-- Preserves user / assistant message chains as thread Markdown.
-- Keeps environment observations such as custom instructions, model profile, and client runtime in `environment/*`.
+- Preserves user / assistant / system message chains as per-thread `thread.json` files.
+- Writes per-thread `convert.json` files with stable conversion metadata.
+- Keeps environment observations such as custom instructions, model profile, and client runtime in run diagnostics.
 - Writes fidelity reports so missing or limited data is visible.
 - Produces timestamped `TimelineForWindowsCodex-export-<run-id>.zip` files.
 - Reuses unchanged thread artifacts during refresh runs.
+- Leaves date filtering and readable global timeline rendering to downstream timeline products.
 
 ## What It Does Not Do
 
@@ -49,7 +53,6 @@ Use this setup through Docker:
 
 ```powershell
 .\tfwc.ps1 settings init
-.\tfwc.ps1 settings validate
 ```
 
 The settings file contains application-level configuration:
@@ -58,7 +61,8 @@ The settings file contains application-level configuration:
 - `outputs_root`: fixed output directory for refresh artifacts
 - `redaction_profile`: `strict` or `loose`
 - `include_archived_sources`: whether archived thread reads are included
-- `include_tool_outputs`: whether tool output text is included when available
+- `include_tool_outputs`: optional diagnostics only. Keep `false` for normal user/assistant transcript exports.
+- `include_compaction_recovery`: optional deep recovery from compaction `replacement_history`. Keep `false` for normal refresh performance.
 
 `.env` remains for runtime/container variables. If a different settings location is needed, set `TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH`.
 
@@ -75,6 +79,7 @@ Each refresh writes a run directory under the configured outputs root:
     status.json
     result.json
     manifest.json
+    README.md
     fidelity_report.json
     fidelity_report.md
     catalog.json
@@ -82,22 +87,21 @@ Each refresh writes a run directory under the configured outputs root:
     update_manifest.json
     logs/
     environment/
-    threads/
     export/TimelineForWindowsCodex-export-<run-id>.zip
+  <thread-id>/
+    convert.json
+    thread.json
   current.json
   refresh-history.jsonl
 ```
 
-The ZIP contains the human-readable entry files:
+The ZIP is intentionally small and contains only the handoff files:
 
-- `readme.html`
-- `threads/index.md`
-- `threads/<thread_id>.md`
-- `environment/ledger.md`
-- `fidelity_report.md`
-- `catalog.json`
-- `processing_profile.json`
-- `update_manifest.json`
+- `README.md`
+- `<thread_id>/convert.json`
+- `<thread_id>/thread.json`
+
+`environment/*`, `fidelity_report.*`, `catalog.json`, `processing_profile.json`, and `update_manifest.json` remain in the run directory for inspection and diagnostics, but they are not part of the normal download ZIP.
 
 ## CLI Usage
 
@@ -105,113 +109,79 @@ Normal operation is Windows PowerShell first and Docker-only behind it. Use `.\t
 
 Host direct execution with `python3 -m timeline_for_windows_codex_worker ...` is disabled unless an explicit test/development override is set.
 
-Run commands from the repository root:
+Run commands from the repository root.
 
-Show fixed settings:
+## CLI Concept
 
-```powershell
-.\tfwc.ps1 settings show
-```
+The CLI follows the same broad concept as `TimelineForAudio`, but this product does not expose separate source/artifact/job-control surfaces. The normal user-facing model is fixed settings, Codex history items, and run inspection.
 
-Configure source roots and output root:
+| Command group | Role |
+|---|---|
+| `settings` | Manage fixed local configuration. Inputs are multiple; the master output root is single. |
+| `items` | Inspect discoverable Codex threads, refresh the export, and copy the latest ZIP. |
+| `runs` | Inspect previous refresh runs. This is a diagnostic/history surface, not the main operation surface. |
 
-```powershell
-.\tfwc.ps1 settings add-source /input/codex-home
-
-.\tfwc.ps1 settings add-source /input/codex-backup
-
-.\tfwc.ps1 settings set-output /shared/outputs
-```
-
-Validate configured paths:
-
-```powershell
-.\tfwc.ps1 settings validate
-```
-
-Initialize the usual local settings in one step:
+Main commands:
 
 ```powershell
 .\tfwc.ps1 settings init
+.\tfwc.ps1 settings status
+.\tfwc.ps1 settings inputs add /input/codex-home
+.\tfwc.ps1 settings inputs list
+.\tfwc.ps1 settings inputs remove input-1234abcd
+.\tfwc.ps1 settings master set /shared/outputs
+.\tfwc.ps1 settings master show
+
+.\tfwc.ps1 items list --json
+.\tfwc.ps1 items refresh --json
+.\tfwc.ps1 items download --to /shared/outputs/handoff
+.\tfwc.ps1 runs list --json
+.\tfwc.ps1 runs show --run-id <run-id> --json
 ```
 
-Refresh from configured sources:
+Refresh from configured settings:
 
 ```powershell
-.\tfwc.ps1 refresh --format json
+.\tfwc.ps1 items refresh --json
 ```
-
-The refresh result reports the ZIP path, thread/event counts, new/changed/unchanged counts, reused/rendered thread counts, fidelity warning count, and slowest threads.
-
-Show the latest artifact:
-
-```powershell
-.\tfwc.ps1 current
-```
-
-Copy the latest ZIP to a handoff directory:
-
-```powershell
-.\tfwc.ps1 export-current --to /shared/outputs/handoff
-```
-
-`export-current` does not overwrite an existing file unless `--overwrite` is passed.
 
 Refresh and copy the latest ZIP in one command:
 
 ```powershell
-.\tfwc.ps1 handoff --to /shared/outputs/handoff
+.\tfwc.ps1 items refresh --download-to /shared/outputs/handoff --json
 ```
 
-`handoff` validates settings, runs `refresh`, and then copies the completed ZIP. Use a path mounted inside the container, such as `/shared/outputs/handoff`.
-
-Discover threads directly:
+Refresh from explicit sources without changing settings:
 
 ```powershell
-.\tfwc.ps1 discover `
-  --primary-root /input/codex-home `
-  --include-archived-sources
-```
-
-Create an ad-hoc export for all discovered threads:
-
-```powershell
-.\tfwc.ps1 run `
+.\tfwc.ps1 items refresh `
   --primary-root /input/codex-home `
   --include-archived-sources `
-  --include-tool-outputs `
   --redaction-profile strict `
-  --format json
+  --json
 ```
 
-Create an export for one or more selected threads:
+Refresh selected items:
 
 ```powershell
-.\tfwc.ps1 run `
+.\tfwc.ps1 items refresh `
   --primary-root /input/codex-home `
-  --thread-id 11111111-2222-3333-4444-555555555555 `
-  --format json
-```
-
-Inspect previous runs:
-
-```powershell
-.\tfwc.ps1 list-jobs --format json
-
-.\tfwc.ps1 show-job <run-id> --format json
+  --item-id 11111111-2222-3333-4444-555555555555 `
+  --json
 ```
 
 Notes:
 
-- Omit `--thread-id` to export all discovered threads.
-- Pass `--thread-id` multiple times for a multi-thread export.
-- `refresh` uses `settings.json` first, then falls back to `configs/runtime.defaults.json`.
-- Ad-hoc commands can still use command options such as `--primary-root` and `--backup-root`.
+- Omit `--item-id` to export all discovered items.
+- Pass `--item-id` multiple times, or pass comma-separated ids, for a multi-item export.
+- `items refresh` uses `settings.json` first, then falls back to `configs/runtime.defaults.json`.
+- `settings inputs remove` accepts the generated `input-...` id from `settings inputs list`.
+- `items download` copies the latest ZIP and does not overwrite an existing file unless `--overwrite` is passed.
 - CLI defaults are loaded from `configs/runtime.defaults.json` unless overridden by settings, environment variables, or command options.
 
 ## Docker Compose
 
-Docker Compose now runs only the Python worker daemon. It does not expose a browser UI. In normal Windows operation, use the PowerShell wrapper rather than typing Docker commands directly.
+Docker Compose runs the Python worker CLI. It does not expose a browser UI. In normal Windows operation, use the PowerShell wrapper rather than typing Docker commands directly.
 
 ```powershell
 cp .env.example .env
@@ -248,9 +218,9 @@ python3 -m unittest discover -s /mnt/c/apps/TimelineForWindowsCodex/worker/tests
 Docker CLI smoke examples:
 
 ```powershell
-.\tfwc.ps1 discover --format json
+.\tfwc.ps1 items list --json
 
-.\tfwc.ps1 run --format json
+.\tfwc.ps1 items refresh --json
 ```
 
 Docker production-like final smoke test:
@@ -259,7 +229,7 @@ Docker production-like final smoke test:
 .\tfwc.ps1 smoke
 ```
 
-This uses Docker Compose for all product commands, mounts real Codex history sources read-only, writes only to a temporary host output root, runs refresh twice, verifies required ZIP entries, and checks that the second refresh reuses unchanged threads.
+This uses Docker Compose for all product commands, mounts real Codex history sources read-only, writes only to a temporary host output root, runs refresh twice, verifies the per-thread `convert.json` / `thread.json` ZIP contract, and checks that the second refresh reuses unchanged threads.
 
 Host production-like final smoke test is development-only and sets the host-run test override internally:
 
@@ -275,23 +245,29 @@ Included:
 
 - thread discovery from `session_index.jsonl`, `sessions/**/*.jsonl`, `state_5.sqlite`, and archived `thread_reads`
 - single-thread, multi-thread, and all-thread export
-- thread Markdown focused on raw user / assistant message chains
-- `threads/<thread_id>.md` export naming
+- per-thread `thread.json` files focused on raw-like user / assistant / system message chains
+- per-thread `convert.json` files for conversion metadata
+- optional compaction `replacement_history` user / assistant recovery
+- `<thread_id>/thread.json` and `<thread_id>/convert.json` export naming
 - observed thread-name points
-- environment ledger
-- fidelity report
-- ZIP export
+- environment ledger in run diagnostics
+- fidelity report in run diagnostics
+- small ZIP handoff with `README.md` and per-thread `convert.json` / `thread.json` files
 - current artifact pointer and refresh history
 - unchanged thread artifact reuse
 - fixed settings for multiple source roots and output root
-- `settings validate` for source/output path checks
 - `settings init` for one-step local setup
-- `refresh` command for normal operation
-- `current` and `export-current` for latest ZIP handoff
-- `handoff` for one-command refresh and ZIP handoff
+- `settings inputs` and `settings master` commands aligned with TimelineForAudio
+- `items list`, `items refresh`, and `items download` for normal operation
+- `items refresh --download-to` for one-command refresh and ZIP handoff
 - Docker-only guard for normal CLI execution
 - timestamped ZIP filename through the run id
 - `processing_profile.json` with slowest thread diagnostics
+
+Not included in normal `thread.json`:
+
+- tool call details, terminal command output, reasoning summaries, and fine-grained file diffs
+- date range filtering; this product manages the full available Codex thread set
 
 Deferred:
 

@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import sys
-import time
 from pathlib import Path
 
 from .contracts import JobRequest, ThreadSelection
 from .discovery import discover_threads
 from .fs_utils import now_iso, read_json
 from .job_store import (
-    collect_jobs_by_state,
     create_job,
     create_job_id,
     iter_run_dirs,
@@ -36,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
             "\n".join(
                 [
                     "Host direct execution is disabled for normal operation.",
-                    "Use Docker Compose instead, for example: docker compose run --rm worker settings show",
+                    "Use Docker Compose instead, for example: docker compose run --rm worker settings status",
                     f"For automated tests only, set {ALLOW_HOST_RUN_ENV}=1.",
                 ]
             ),
@@ -51,43 +50,28 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="timeline-for-windows-codex-worker")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    discover_parser = subparsers.add_parser("discover")
-    _add_source_arguments(discover_parser)
-    discover_parser.add_argument("--format", choices=("text", "json"), default="text")
+    items_parser = subparsers.add_parser("items")
+    items_subparsers = items_parser.add_subparsers(dest="items_command", required=True)
+    items_list_parser = items_subparsers.add_parser("list")
+    _add_source_arguments(items_list_parser)
+    _add_format_argument(items_list_parser)
+    items_refresh_parser = items_subparsers.add_parser("refresh")
+    _add_source_arguments(items_refresh_parser)
+    _add_job_arguments(items_refresh_parser)
+    items_refresh_parser.add_argument("--download-to")
+    items_refresh_parser.add_argument("--overwrite", action="store_true")
+    items_download_parser = items_subparsers.add_parser("download")
+    items_download_parser.add_argument("--to", required=True)
+    items_download_parser.add_argument("--overwrite", action="store_true")
+    _add_format_argument(items_download_parser)
 
-    create_job_parser = subparsers.add_parser("create-job")
-    _add_source_arguments(create_job_parser)
-    _add_job_arguments(create_job_parser)
-
-    run_parser = subparsers.add_parser("run")
-    _add_source_arguments(run_parser)
-    _add_job_arguments(run_parser)
-
-    refresh_parser = subparsers.add_parser("refresh")
-    _add_job_arguments(refresh_parser)
-    refresh_parser.add_argument(
-        "--include-archived-sources",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-    )
-
-    current_parser = subparsers.add_parser("current")
-    current_parser.add_argument("--format", choices=("text", "json"), default="text")
-
-    export_current_parser = subparsers.add_parser("export-current")
-    export_current_parser.add_argument("--to", required=True)
-    export_current_parser.add_argument("--overwrite", action="store_true")
-    export_current_parser.add_argument("--format", choices=("text", "json"), default="text")
-
-    handoff_parser = subparsers.add_parser("handoff")
-    handoff_parser.add_argument("--to", required=True)
-    handoff_parser.add_argument("--overwrite", action="store_true")
-    _add_job_arguments(handoff_parser)
-    handoff_parser.add_argument(
-        "--include-archived-sources",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-    )
+    runs_parser = subparsers.add_parser("runs")
+    runs_subparsers = runs_parser.add_subparsers(dest="runs_command", required=True)
+    runs_list_parser = runs_subparsers.add_parser("list")
+    _add_format_argument(runs_list_parser)
+    runs_show_parser = runs_subparsers.add_parser("show")
+    runs_show_parser.add_argument("--run-id", required=True)
+    _add_format_argument(runs_show_parser)
 
     settings_parser = subparsers.add_parser("settings")
     settings_subparsers = settings_parser.add_subparsers(dest="settings_command", required=True)
@@ -95,76 +79,58 @@ def main(argv: list[str] | None = None) -> int:
     settings_init_parser.add_argument("--source-root", action="append", default=[])
     settings_init_parser.add_argument("--output-root")
     settings_init_parser.add_argument("--force", action="store_true")
-    settings_init_parser.add_argument("--format", choices=("text", "json"), default="text")
-    settings_show_parser = settings_subparsers.add_parser("show")
-    settings_show_parser.add_argument("--format", choices=("text", "json"), default="text")
-    settings_validate_parser = settings_subparsers.add_parser("validate")
-    settings_validate_parser.add_argument("--format", choices=("text", "json"), default="text")
-    settings_add_source_parser = settings_subparsers.add_parser("add-source")
-    settings_add_source_parser.add_argument("path")
-    settings_add_source_parser.add_argument("--format", choices=("text", "json"), default="text")
-    settings_remove_source_parser = settings_subparsers.add_parser("remove-source")
-    settings_remove_source_parser.add_argument("path")
-    settings_remove_source_parser.add_argument("--format", choices=("text", "json"), default="text")
-    settings_clear_sources_parser = settings_subparsers.add_parser("clear-sources")
-    settings_clear_sources_parser.add_argument("--format", choices=("text", "json"), default="text")
-    settings_set_output_parser = settings_subparsers.add_parser("set-output")
-    settings_set_output_parser.add_argument("path")
-    settings_set_output_parser.add_argument("--format", choices=("text", "json"), default="text")
+    _add_format_argument(settings_init_parser)
+    settings_status_parser = settings_subparsers.add_parser("status")
+    _add_format_argument(settings_status_parser)
 
-    list_jobs_parser = subparsers.add_parser("list-jobs")
-    list_jobs_parser.add_argument("--format", choices=("text", "json"), default="text")
+    settings_inputs_parser = settings_subparsers.add_parser("inputs")
+    settings_inputs_subparsers = settings_inputs_parser.add_subparsers(dest="inputs_command", required=True)
+    settings_inputs_list_parser = settings_inputs_subparsers.add_parser("list")
+    _add_format_argument(settings_inputs_list_parser)
+    settings_inputs_add_parser = settings_inputs_subparsers.add_parser("add")
+    settings_inputs_add_parser.add_argument("path")
+    _add_format_argument(settings_inputs_add_parser)
+    settings_inputs_remove_parser = settings_inputs_subparsers.add_parser("remove")
+    settings_inputs_remove_parser.add_argument("input")
+    _add_format_argument(settings_inputs_remove_parser)
+    settings_inputs_clear_parser = settings_inputs_subparsers.add_parser("clear")
+    _add_format_argument(settings_inputs_clear_parser)
 
-    show_job_parser = subparsers.add_parser("show-job")
-    show_job_parser.add_argument("job")
-    show_job_parser.add_argument("--format", choices=("text", "json"), default="text")
-
-    daemon_parser = subparsers.add_parser("daemon")
-    daemon_parser.add_argument("--poll-interval", type=int, default=5)
-    daemon_parser.add_argument("--once", action="store_true")
-
-    process_parser = subparsers.add_parser("process-job")
-    process_parser.add_argument("job_dir")
+    settings_master_parser = settings_subparsers.add_parser("master")
+    settings_master_subparsers = settings_master_parser.add_subparsers(dest="master_command", required=True)
+    settings_master_show_parser = settings_master_subparsers.add_parser("show")
+    _add_format_argument(settings_master_show_parser)
+    settings_master_set_parser = settings_master_subparsers.add_parser("set")
+    settings_master_set_parser.add_argument("path")
+    _add_format_argument(settings_master_set_parser)
 
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "discover":
-            return _handle_discover(args, defaults, user_settings)
+        if args.command == "items":
+            if args.items_command == "list":
+                return _handle_items_list(args, defaults, user_settings)
+            if args.items_command == "refresh":
+                return _handle_refresh(
+                    args,
+                    outputs_root,
+                    defaults,
+                    user_settings,
+                    settings_only=not _has_explicit_source_args(args),
+                    download_to=args.download_to,
+                    overwrite=args.overwrite,
+                )
+            if args.items_command == "download":
+                return _handle_items_download(args, outputs_root)
 
-        if args.command == "create-job":
-            return _handle_create_job(args, outputs_root, defaults, user_settings)
-
-        if args.command == "run":
-            return _handle_run(args, outputs_root, defaults, user_settings)
-
-        if args.command == "refresh":
-            return _handle_refresh(args, outputs_root, defaults, user_settings)
-
-        if args.command == "current":
-            return _handle_current(args, outputs_root)
-
-        if args.command == "export-current":
-            return _handle_export_current(args, outputs_root)
-
-        if args.command == "handoff":
-            return _handle_handoff(args, runtime, defaults, user_settings, outputs_root)
+        if args.command == "runs":
+            if args.runs_command == "list":
+                return _handle_list_jobs(args, outputs_root)
+            if args.runs_command == "show":
+                return _handle_show_job(args, outputs_root, args.run_id)
 
         if args.command == "settings":
             return _handle_settings(args, runtime, defaults, user_settings)
-
-        if args.command == "list-jobs":
-            return _handle_list_jobs(args, outputs_root)
-
-        if args.command == "show-job":
-            return _handle_show_job(args, outputs_root)
-
-        if args.command == "process-job":
-            process_job(Path(args.job_dir).resolve())
-            return 0
-
-        if args.command == "daemon":
-            return run_daemon(poll_interval=max(1, args.poll_interval), once=args.once)
     except (FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -191,20 +157,32 @@ def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_format_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--json", action="store_const", const="json", dest="format")
+
+
 def _add_job_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--thread-id", action="append", default=[])
+    parser.add_argument("--item-id", action="append", default=[])
     parser.add_argument(
         "--include-tool-outputs",
         action=argparse.BooleanOptionalAction,
         default=None,
     )
+    parser.add_argument(
+        "--include-compaction-recovery",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     parser.add_argument("--redaction-profile", choices=("strict", "loose"))
-    parser.add_argument("--date-from")
-    parser.add_argument("--date-to")
-    parser.add_argument("--format", choices=("text", "json"), default="text")
+    _add_format_argument(parser)
 
 
-def _handle_discover(
+def _has_explicit_source_args(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "primary_root", None) or getattr(args, "backup_root", []))
+
+
+def _handle_items_list(
     args: argparse.Namespace,
     defaults: RuntimeDefaults,
     user_settings: UserSettings,
@@ -217,6 +195,7 @@ def _handle_discover(
     )
     payload = [
         {
+            "item_id": thread.thread_id,
             "thread_id": thread.thread_id,
             "preferred_title": thread.preferred_title,
             "observed_thread_names": [item.to_dict() for item in thread.observed_thread_names],
@@ -233,78 +212,22 @@ def _handle_discover(
     return 0
 
 
-def _handle_create_job(
-    args: argparse.Namespace,
-    outputs_root: Path,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-) -> int:
-    request, job_dir = _prepare_job(args, outputs_root, defaults, user_settings)
-    payload = {
-        "job_id": request.job_id,
-        "run_directory": str(job_dir),
-        "thread_count": len(request.selected_threads),
-        "selected_thread_ids": [thread.thread_id for thread in request.selected_threads],
-    }
-    _print_output(
-        args.format,
-        payload,
-        "\n".join(
-            [
-                f"job_id: {request.job_id}",
-                f"run_directory: {job_dir}",
-                f"thread_count: {len(request.selected_threads)}",
-            ]
-        ),
-    )
-    return 0
-
-
-def _handle_run(
-    args: argparse.Namespace,
-    outputs_root: Path,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-) -> int:
-    request, job_dir = _prepare_job(args, outputs_root, defaults, user_settings)
-    process_job(job_dir)
-    status = load_status(job_dir)
-    result = read_json(result_path(job_dir))
-    payload = {
-        "job_id": request.job_id,
-        "run_directory": str(job_dir),
-        "state": status.state,
-        "archive_path": result.get("archive_path"),
-        "thread_count": result.get("thread_count", len(request.selected_threads)),
-        "event_count": result.get("event_count", 0),
-        "segment_count": result.get("segment_count", 0),
-    }
-    _print_output(
-        args.format,
-        payload,
-        "\n".join(
-            [
-                f"job_id: {request.job_id}",
-                f"run_directory: {job_dir}",
-                f"state: {status.state}",
-                f"archive_path: {result.get('archive_path') or ''}",
-                f"thread_count: {payload['thread_count']}",
-                f"event_count: {payload['event_count']}",
-            ]
-        ),
-    )
-    return 0
-
-
 def _handle_refresh(
     args: argparse.Namespace,
     outputs_root: Path,
     defaults: RuntimeDefaults,
     user_settings: UserSettings,
+    *,
+    settings_only: bool = True,
+    download_to: str | None = None,
+    overwrite: bool = False,
 ) -> int:
-    request, job_dir = _prepare_job(args, outputs_root, defaults, user_settings, settings_only=True)
+    request, job_dir = _prepare_job(args, outputs_root, defaults, user_settings, settings_only=settings_only)
     process_job(job_dir)
     payload = _build_refresh_summary(request, job_dir)
+    if download_to:
+        current_payload = _load_current_summary(outputs_root)
+        payload["download"] = _copy_current_archive(current_payload, download_to, overwrite=overwrite)
     _print_output(args.format, payload, _format_refresh_summary_text(payload))
     return 0
 
@@ -317,11 +240,6 @@ def _prepare_job(
     *,
     settings_only: bool = False,
 ) -> tuple[JobRequest, Path]:
-    date_from = _normalize_date(args.date_from)
-    date_to = _normalize_date(args.date_to)
-    if date_from and date_to and date_from > date_to:
-        raise ValueError("date_from must be on or before date_to.")
-
     primary_root, backup_roots = _resolve_source_roots(args, defaults, user_settings, settings_only=settings_only)
     include_archived_sources = _resolve_include_archived(
         args.include_archived_sources,
@@ -333,10 +251,15 @@ def _prepare_job(
         defaults,
         user_settings,
     )
+    include_compaction_recovery = _resolve_include_compaction_recovery(
+        args.include_compaction_recovery,
+        defaults,
+        user_settings,
+    )
     redaction_profile = _resolve_redaction_profile(args.redaction_profile, defaults, user_settings)
 
     discovered = discover_threads(primary_root, backup_roots, include_archived_sources)
-    selected_threads = _select_threads(discovered, args.thread_id)
+    selected_threads = _select_threads(discovered, _selected_item_ids(args))
     if not selected_threads:
         raise ValueError("No threads matched the current selection.")
 
@@ -348,9 +271,8 @@ def _prepare_job(
         backup_codex_home_paths=backup_roots,
         include_archived_sources=include_archived_sources,
         include_tool_outputs=include_tool_outputs,
+        include_compaction_recovery=include_compaction_recovery,
         redaction_profile=redaction_profile,
-        date_from=date_from,
-        date_to=date_to,
         selected_threads=selected_threads,
     )
     job_dir = outputs_root / job_id
@@ -358,58 +280,10 @@ def _prepare_job(
     return request, job_dir
 
 
-def _handle_current(args: argparse.Namespace, outputs_root: Path) -> int:
-    payload = _load_current_summary(outputs_root)
-    _print_output(args.format, payload, _format_current_summary_text(payload))
-    return 0
-
-
-def _handle_export_current(args: argparse.Namespace, outputs_root: Path) -> int:
+def _handle_items_download(args: argparse.Namespace, outputs_root: Path) -> int:
     payload = _load_current_summary(outputs_root)
     result_payload = _copy_current_archive(payload, args.to, overwrite=args.overwrite)
-    _print_output(args.format, result_payload, _format_export_current_text(result_payload))
-    return 0
-
-
-def _handle_handoff(
-    args: argparse.Namespace,
-    runtime,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-    outputs_root: Path,
-) -> int:
-    validation = _build_settings_validation(runtime, defaults, user_settings)
-    if not validation["ok"]:
-        issues = "; ".join(str(issue) for issue in validation.get("issues", []))
-        raise ValueError(f"Settings validation failed. Run settings init or fix settings first. {issues}")
-
-    request, job_dir = _prepare_job(args, outputs_root, defaults, user_settings, settings_only=True)
-    process_job(job_dir)
-    refresh_payload = _build_refresh_summary(request, job_dir)
-    current_payload = _load_current_summary(outputs_root)
-    export_payload = _copy_current_archive(current_payload, args.to, overwrite=args.overwrite)
-    payload = {
-        "state": "completed",
-        "refresh": refresh_payload,
-        "export": export_payload,
-    }
-    _print_output(
-        args.format,
-        payload,
-        "\n".join(
-            [
-                "state: completed",
-                f"refresh_id: {refresh_payload['refresh_id']}",
-                f"archive_path: {refresh_payload['archive_path']}",
-                f"destination_path: {export_payload['destination_path']}",
-                f"thread_count: {refresh_payload['thread_count']}",
-                f"event_count: {refresh_payload['event_count']}",
-                f"processing_mode: {refresh_payload.get('processing_mode') or ''}",
-                f"reused_thread_count: {refresh_payload['reused_thread_count']}",
-                f"rendered_thread_count: {refresh_payload['rendered_thread_count']}",
-            ]
-        ),
-    )
+    _print_output(args.format, result_payload, _format_items_download_text(result_payload))
     return 0
 
 
@@ -422,40 +296,71 @@ def _handle_settings(
     if args.settings_command == "init":
         return _handle_settings_init(args, runtime, user_settings)
 
-    if args.settings_command == "show":
+    if args.settings_command in {"show", "status"}:
         return _print_settings(args, runtime, user_settings)
 
-    if args.settings_command == "validate":
-        return _handle_settings_validate(args, runtime, defaults, user_settings)
+    if args.settings_command == "inputs":
+        return _handle_settings_inputs(args, runtime, user_settings)
 
-    if args.settings_command == "add-source":
+    if args.settings_command == "master":
+        return _handle_settings_master(args, runtime, user_settings)
+
+    raise ValueError(f"Unsupported settings command: {args.settings_command}")
+
+
+def _handle_settings_inputs(
+    args: argparse.Namespace,
+    runtime,
+    user_settings: UserSettings,
+) -> int:
+    if args.inputs_command == "list":
+        return _print_settings_inputs(args, runtime, user_settings)
+
+    if args.inputs_command == "add":
         source_path = _normalize_config_path(args.path)
         source_roots = list(user_settings.source_roots or [])
         if source_path not in source_roots:
             source_roots.append(source_path)
         user_settings.source_roots = source_roots
         save_user_settings(user_settings, runtime)
-        return _print_settings(args, runtime, user_settings)
+        return _print_settings_inputs(args, runtime, user_settings)
 
-    if args.settings_command == "remove-source":
-        source_path = _normalize_config_path(args.path)
-        user_settings.source_roots = [
-            item for item in (user_settings.source_roots or []) if _normalize_config_path(item) != source_path
+    if args.inputs_command == "remove":
+        selector = str(args.input).strip()
+        source_roots = list(user_settings.source_roots or [])
+        remaining = [
+            item
+            for item in source_roots
+            if _source_input_id(item) != selector and _normalize_config_path(item) != _normalize_selector_path(selector)
         ]
+        if len(remaining) == len(source_roots):
+            raise ValueError(f"Input source was not found: {selector}")
+        user_settings.source_roots = remaining
         save_user_settings(user_settings, runtime)
-        return _print_settings(args, runtime, user_settings)
+        return _print_settings_inputs(args, runtime, user_settings)
 
-    if args.settings_command == "clear-sources":
+    if args.inputs_command == "clear":
         user_settings.source_roots = []
         save_user_settings(user_settings, runtime)
-        return _print_settings(args, runtime, user_settings)
+        return _print_settings_inputs(args, runtime, user_settings)
 
-    if args.settings_command == "set-output":
+    raise ValueError(f"Unsupported settings inputs command: {args.inputs_command}")
+
+
+def _handle_settings_master(
+    args: argparse.Namespace,
+    runtime,
+    user_settings: UserSettings,
+) -> int:
+    if args.master_command == "show":
+        return _print_settings_master(args, runtime, user_settings)
+
+    if args.master_command == "set":
         user_settings.outputs_root = _normalize_config_path(args.path)
         save_user_settings(user_settings, runtime)
-        return _print_settings(args, runtime, user_settings)
+        return _print_settings_master(args, runtime, user_settings)
 
-    raise ValueError(f"Unsupported settings command: {args.settings_command}")
+    raise ValueError(f"Unsupported settings master command: {args.master_command}")
 
 
 def _handle_settings_init(
@@ -503,7 +408,7 @@ def _load_current_summary(outputs_root: Path) -> dict[str, object]:
     archive_size_bytes = archive_path.stat().st_size if archive_path.exists() and archive_path.is_file() else 0
     return {
         "state": current.get("state"),
-        "job_id": current.get("job_id"),
+        "run_id": current.get("job_id"),
         "updated_at": current.get("updated_at"),
         "run_directory": current.get("run_directory"),
         "archive_path": str(archive_path),
@@ -537,6 +442,7 @@ def _build_refresh_summary(request: JobRequest, job_dir: Path) -> dict[str, obje
         else {}
     )
     return {
+        "run_id": request.job_id,
         "refresh_id": request.job_id,
         "run_directory": str(job_dir),
         "state": status.state,
@@ -556,23 +462,28 @@ def _build_refresh_summary(request: JobRequest, job_dir: Path) -> dict[str, obje
 def _format_refresh_summary_text(payload: dict[str, object]) -> str:
     counts = payload["update_counts"] if isinstance(payload.get("update_counts"), dict) else {}
     slowest_threads = payload["slowest_threads"] if isinstance(payload.get("slowest_threads"), list) else []
-    return "\n".join(
+    lines = [
+        f"run_id: {payload.get('run_id') or payload.get('refresh_id') or ''}",
+        f"run_directory: {payload.get('run_directory') or ''}",
+        f"state: {payload.get('state') or ''}",
+        f"archive_path: {payload.get('archive_path') or ''}",
+        f"thread_count: {payload.get('thread_count') or 0}",
+        f"event_count: {payload.get('event_count') or 0}",
+        f"processing_mode: {payload.get('processing_mode') or ''}",
+        f"reused_thread_count: {payload.get('reused_thread_count') or 0}",
+        f"rendered_thread_count: {payload.get('rendered_thread_count') or 0}",
+        "updates: "
+        + ", ".join(
+            f"{name}={counts.get(name, 0)}"
+            for name in ("new", "changed", "unchanged", "missing", "degraded")
+        ),
+        f"fidelity_warning_count: {payload.get('fidelity_warning_count') or 0}",
+    ]
+    download = payload.get("download")
+    if isinstance(download, dict):
+        lines.append(f"download_destination_path: {download.get('destination_path') or ''}")
+    lines.extend(
         [
-            f"refresh_id: {payload.get('refresh_id') or ''}",
-            f"run_directory: {payload.get('run_directory') or ''}",
-            f"state: {payload.get('state') or ''}",
-            f"archive_path: {payload.get('archive_path') or ''}",
-            f"thread_count: {payload.get('thread_count') or 0}",
-            f"event_count: {payload.get('event_count') or 0}",
-            f"processing_mode: {payload.get('processing_mode') or ''}",
-            f"reused_thread_count: {payload.get('reused_thread_count') or 0}",
-            f"rendered_thread_count: {payload.get('rendered_thread_count') or 0}",
-            "updates: "
-            + ", ".join(
-                f"{name}={counts.get(name, 0)}"
-                for name in ("new", "changed", "unchanged", "missing", "degraded")
-            ),
-            f"fidelity_warning_count: {payload.get('fidelity_warning_count') or 0}",
             "slowest_threads:",
             *[
                 "- "
@@ -589,6 +500,7 @@ def _format_refresh_summary_text(payload: dict[str, object]) -> str:
             ],
         ]
     )
+    return "\n".join(lines)
 
 
 def _copy_current_archive(
@@ -618,7 +530,7 @@ def _copy_current_archive(
     }
 
 
-def _format_export_current_text(payload: dict[str, object]) -> str:
+def _format_items_download_text(payload: dict[str, object]) -> str:
     return "\n".join(
         [
             f"state: {payload.get('state') or ''}",
@@ -640,45 +552,6 @@ def _read_optional_json(path: Path) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _format_current_summary_text(payload: dict[str, object]) -> str:
-    counts = payload.get("update_counts") if isinstance(payload.get("update_counts"), dict) else {}
-    slowest_threads = payload.get("slowest_threads") if isinstance(payload.get("slowest_threads"), list) else []
-    lines = [
-        f"state: {payload.get('state') or ''}",
-        f"job_id: {payload.get('job_id') or ''}",
-        f"updated_at: {payload.get('updated_at') or ''}",
-        f"archive_path: {payload.get('archive_path') or ''}",
-        f"archive_exists: {str(bool(payload.get('archive_exists'))).lower()}",
-        f"archive_size_bytes: {payload.get('archive_size_bytes') or 0}",
-        f"thread_count: {payload.get('thread_count') or 0}",
-        f"event_count: {payload.get('event_count') or 0}",
-        f"processing_mode: {payload.get('processing_mode') or ''}",
-        f"reused_thread_count: {payload.get('reused_thread_count') or 0}",
-        f"rendered_thread_count: {payload.get('rendered_thread_count') or 0}",
-        "updates: "
-        + ", ".join(
-            f"{name}={counts.get(name, 0)}"
-            for name in ("new", "changed", "unchanged", "missing", "degraded")
-        ),
-        f"fidelity_warning_count: {payload.get('fidelity_warning_count') or 0}",
-        "slowest_threads:",
-    ]
-    lines.extend(
-        "- "
-        + " | ".join(
-            [
-                str(item.get("thread_id") or ""),
-                str(item.get("preferred_title") or ""),
-                f"{item.get('processing_duration_ms', 0)}ms",
-                str(item.get("cache_status") or ""),
-            ]
-        )
-        for item in slowest_threads[:5]
-        if isinstance(item, dict)
-    )
-    return "\n".join(lines)
-
-
 def _print_settings(
     args: argparse.Namespace,
     runtime,
@@ -694,6 +567,7 @@ def _print_settings(
         "redaction_profile": user_settings.redaction_profile or None,
         "include_archived_sources": user_settings.include_archived_sources,
         "include_tool_outputs": user_settings.include_tool_outputs,
+        "include_compaction_recovery": user_settings.include_compaction_recovery,
         "using_default_source_roots": not bool(user_settings.source_roots),
     }
     lines = [
@@ -711,37 +585,67 @@ def _print_settings(
     return 0
 
 
-def _handle_settings_validate(
+def _print_settings_inputs(
     args: argparse.Namespace,
     runtime,
-    defaults: RuntimeDefaults,
     user_settings: UserSettings,
 ) -> int:
-    payload = _build_settings_validation(runtime, defaults, user_settings)
+    defaults = load_runtime_defaults(runtime)
+    configured_roots = [item.strip() for item in (user_settings.source_roots or []) if item.strip()]
+    effective_roots = _effective_source_roots_for_settings(defaults, user_settings)
+    payload = {
+        "settings_path": str(user_settings_path(runtime)),
+        "configured": bool(configured_roots),
+        "inputs": _source_input_rows(configured_roots),
+        "effective_inputs": _source_input_rows(effective_roots),
+    }
     lines = [
-        f"state: {'ok' if payload['ok'] else 'ng'}",
         f"settings_path: {payload['settings_path']}",
-        f"outputs_root: {payload['outputs_root']['path']}",
-        f"outputs_root_ready: {str(payload['outputs_root']['ready']).lower()}",
-        "source_roots:",
+        f"configured: {str(payload['configured']).lower()}",
+        "inputs:",
     ]
-    for source in payload["source_roots"]:
-        lines.append(
-            "- "
-            + " | ".join(
-                [
-                    str(source["path"]),
-                    f"exists={str(source['exists']).lower()}",
-                    f"readable={str(source['readable']).lower()}",
-                    f"kind={source['kind']}",
-                ]
-            )
+    rows = payload["inputs"] if configured_roots else payload["effective_inputs"]
+    if configured_roots:
+        lines.extend(
+            f"- {row['input_id']} | {row['kind']} | {row['path']}"
+            for row in rows
+            if isinstance(row, dict)
         )
-    if payload["issues"]:
-        lines.append("issues:")
-        lines.extend(f"- {issue}" for issue in payload["issues"])
+    else:
+        lines.append("- (not configured; runtime defaults will be used)")
+        lines.append("effective_inputs:")
+        lines.extend(
+            f"- {row['input_id']} | {row['kind']} | {row['path']}"
+            for row in rows
+            if isinstance(row, dict)
+        )
     _print_output(args.format, payload, "\n".join(lines))
-    return 0 if payload["ok"] else 1
+    return 0
+
+
+def _print_settings_master(
+    args: argparse.Namespace,
+    runtime,
+    user_settings: UserSettings,
+) -> int:
+    outputs_root = _effective_outputs_root(runtime.outputs_root, user_settings)
+    payload = {
+        "settings_path": str(user_settings_path(runtime)),
+        "master_root": str(outputs_root),
+        "configured": bool((user_settings.outputs_root or "").strip()),
+    }
+    _print_output(
+        args.format,
+        payload,
+        "\n".join(
+            [
+                f"settings_path: {payload['settings_path']}",
+                f"master_root: {payload['master_root']}",
+                f"configured: {str(payload['configured']).lower()}",
+            ]
+        ),
+    )
+    return 0
 
 
 def _handle_list_jobs(args: argparse.Namespace, outputs_root: Path) -> int:
@@ -752,7 +656,7 @@ def _handle_list_jobs(args: argparse.Namespace, outputs_root: Path) -> int:
         result = read_json(result_path(job_dir)) if result_path(job_dir).exists() else {}
         rows.append(
             {
-                "job_id": request.job_id,
+                "run_id": request.job_id,
                 "state": status.state,
                 "current_stage": status.current_stage,
                 "created_at": request.created_at,
@@ -767,17 +671,17 @@ def _handle_list_jobs(args: argparse.Namespace, outputs_root: Path) -> int:
     return 0
 
 
-def _handle_show_job(args: argparse.Namespace, outputs_root: Path) -> int:
-    job_dir = _resolve_job_dir(args.job, outputs_root)
+def _handle_show_job(args: argparse.Namespace, outputs_root: Path, run_id: str) -> int:
+    job_dir = _resolve_job_dir(run_id, outputs_root)
     if not request_path(job_dir).exists():
-        raise FileNotFoundError(f"Job was not found: {args.job}")
+        raise FileNotFoundError(f"Run was not found: {run_id}")
 
     request = load_request(job_dir)
     status = load_status(job_dir)
     result = read_json(result_path(job_dir)) if result_path(job_dir).exists() else {}
     manifest = read_json(manifest_path(job_dir)) if manifest_path(job_dir).exists() else {}
     payload = {
-        "job_id": request.job_id,
+        "run_id": request.job_id,
         "run_directory": str(job_dir),
         "status": status.to_dict(),
         "result": result,
@@ -844,6 +748,18 @@ def _resolve_include_tool_outputs(
     return defaults.default_include_tool_outputs
 
 
+def _resolve_include_compaction_recovery(
+    value: bool | None,
+    defaults: RuntimeDefaults,
+    user_settings: UserSettings,
+) -> bool:
+    if value is not None:
+        return bool(value)
+    if user_settings.include_compaction_recovery is not None:
+        return user_settings.include_compaction_recovery
+    return defaults.default_include_compaction_recovery
+
+
 def _resolve_redaction_profile(
     value: str | None,
     defaults: RuntimeDefaults,
@@ -891,67 +807,25 @@ def _default_init_source_roots() -> list[str]:
     return existing or [str(candidates[0])]
 
 
-def _build_settings_validation(
-    runtime,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-) -> dict[str, object]:
-    source_roots = _effective_source_roots_for_settings(defaults, user_settings)
-    issues: list[str] = []
-    source_rows: list[dict[str, object]] = []
-    for index, source in enumerate(source_roots):
-        path = Path(source).expanduser().resolve()
-        exists = path.exists()
-        is_dir = path.is_dir()
-        readable = bool(exists and is_dir and os.access(path, os.R_OK))
-        if not exists:
-            issues.append(f"Source root does not exist: {path}")
-        elif not is_dir:
-            issues.append(f"Source root is not a directory: {path}")
-        elif not readable:
-            issues.append(f"Source root is not readable: {path}")
-        source_rows.append(
-            {
-                "path": str(path),
-                "kind": "primary" if index == 0 else "backup",
-                "exists": exists,
-                "is_directory": is_dir,
-                "readable": readable,
-            }
-        )
-
-    outputs_root = _effective_outputs_root(runtime.outputs_root, user_settings)
-    output_parent = _nearest_existing_parent(outputs_root)
-    output_ready = bool(output_parent is not None and os.access(output_parent, os.W_OK))
-    if output_parent is None:
-        issues.append(f"No existing parent directory for outputs_root: {outputs_root}")
-    elif not output_ready:
-        issues.append(f"Output root parent is not writable: {output_parent}")
-
-    return {
-        "ok": not issues,
-        "settings_path": str(user_settings_path(runtime)),
-        "using_default_source_roots": not bool(user_settings.source_roots),
-        "source_roots": source_rows,
-        "outputs_root": {
-            "path": str(outputs_root),
-            "exists": outputs_root.exists(),
-            "is_directory": outputs_root.is_dir(),
-            "nearest_existing_parent": str(output_parent) if output_parent is not None else "",
-            "ready": output_ready,
-        },
-        "issues": issues,
-    }
+def _source_input_rows(source_roots: list[str]) -> list[dict[str, object]]:
+    return [
+        {
+            "input_id": _source_input_id(source),
+            "path": _normalize_config_path(source),
+            "kind": "primary" if index == 0 else "backup",
+        }
+        for index, source in enumerate(source_roots)
+    ]
 
 
-def _nearest_existing_parent(path: Path) -> Path | None:
-    current = path
-    while True:
-        if current.exists():
-            return current if current.is_dir() else current.parent
-        if current.parent == current:
-            return None
-        current = current.parent
+def _source_input_id(path: str) -> str:
+    normalized = _normalize_config_path(path).casefold()
+    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:8]
+    return f"input-{digest}"
+
+
+def _normalize_selector_path(value: str) -> str:
+    return _normalize_config_path(value)
 
 
 def _normalize_config_path(value: str) -> str:
@@ -965,25 +839,23 @@ def _resolve_destination_root(value: str) -> Path:
     return Path(normalized).expanduser().resolve()
 
 
-def _normalize_date(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip()
-    return normalized or None
-
-
 def _select_threads(
     discovered: list[ThreadSelection],
     selected_ids: list[str],
 ) -> list[ThreadSelection]:
-    normalized_ids = [item.strip() for item in selected_ids if item and item.strip()]
+    normalized_ids = [
+        item.strip()
+        for selected_id in selected_ids
+        for item in str(selected_id).split(",")
+        if item.strip()
+    ]
     if not normalized_ids:
         return discovered
 
     selected_map = {thread.thread_id.casefold(): thread for thread in discovered}
     missing = [item for item in normalized_ids if item.casefold() not in selected_map]
     if missing:
-        raise ValueError(f"Unknown thread ids: {', '.join(missing)}")
+        raise ValueError(f"Unknown item ids: {', '.join(missing)}")
 
     rows: list[ThreadSelection] = []
     seen: set[str] = set()
@@ -994,6 +866,10 @@ def _select_threads(
         seen.add(key)
         rows.append(selected_map[key])
     return rows
+
+
+def _selected_item_ids(args: argparse.Namespace) -> list[str]:
+    return [str(item) for item in getattr(args, "item_id", []) or []]
 
 
 def _resolve_job_dir(job: str, outputs_root: Path) -> Path:
@@ -1015,7 +891,7 @@ def _print_output(format_name: str, payload: object, text_output: str) -> None:
 
 def _format_discovery_text(discovered: list[ThreadSelection]) -> str:
     if not discovered:
-        return "No threads discovered."
+        return "No items discovered."
     return "\n".join(
         " | ".join(
             [
@@ -1031,11 +907,11 @@ def _format_discovery_text(discovered: list[ThreadSelection]) -> str:
 
 def _format_list_jobs_text(rows: list[dict[str, object]]) -> str:
     if not rows:
-        return "No jobs found."
+        return "No runs found."
     return "\n".join(
         " | ".join(
             [
-                str(row.get("job_id") or ""),
+                str(row.get("run_id") or ""),
                 str(row.get("state") or ""),
                 f"{row.get('threads_done', 0)}/{row.get('thread_count', 0)} threads",
                 str(row.get("updated_at") or "-"),
@@ -1052,7 +928,7 @@ def _format_show_job_text(
     result: dict[str, object],
 ) -> str:
     lines = [
-        f"job_id: {request.job_id}",
+        f"run_id: {request.job_id}",
         f"run_directory: {job_dir}",
         f"state: {status.state}",
         f"current_stage: {status.current_stage}",
@@ -1065,26 +941,3 @@ def _format_show_job_text(
         for thread in request.selected_threads
     )
     return "\n".join(lines)
-
-
-def run_daemon(*, poll_interval: int, once: bool) -> int:
-    runtime = load_runtime_paths()
-
-    while True:
-        running_jobs = collect_jobs_by_state(runtime.outputs_root, "running")
-        if running_jobs:
-            if once:
-                return 0
-            time.sleep(poll_interval)
-            continue
-
-        pending_jobs = collect_jobs_by_state(runtime.outputs_root, "pending")
-        if pending_jobs:
-            process_job(pending_jobs[0])
-            if once:
-                return 0
-            continue
-
-        if once:
-            return 0
-        time.sleep(poll_interval)

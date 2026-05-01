@@ -9,7 +9,7 @@
   ],
   "default_redaction_profile": "strict",
   "default_include_archived_sources": true,
-  "default_include_tool_outputs": true,
+  "default_include_tool_outputs": false,
+  "default_include_compaction_recovery": false,
   "ui_language": "ja"
 }
-

@@ -34,7 +34,6 @@ def create_job_id(outputs_root: Path) -> str:
 
 def create_job(job_dir: Path, request: JobRequest) -> None:
     ensure_dir(job_dir)
-    ensure_dir(job_dir / "threads")
     ensure_dir(job_dir / "environment")
     ensure_dir(job_dir / "export")
     ensure_dir(job_dir / "logs")

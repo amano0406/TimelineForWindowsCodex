@@ -7,5 +7,6 @@
   "outputs_root": "/mnt/c/Codex/archive/TimelineForWindowsCodex/outputs",
   "redaction_profile": "strict",
   "include_archived_sources": true,
-  "include_tool_outputs": true
+  "include_tool_outputs": false,
+  "include_compaction_recovery": false
 }

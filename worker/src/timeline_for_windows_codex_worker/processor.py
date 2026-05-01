@@ -26,22 +26,25 @@ from .parse_sessions import (
 from .timeline import (
     build_segments,
     build_environment_ledger,
-    export_thread_markdown_name,
+    build_thread_convert_payload,
+    build_thread_conversation_payload,
+    export_thread_dir_name,
     render_environment_ledger_md,
-    render_export_readme_html,
+    render_export_readme_md,
     render_fidelity_report_md,
+    THREAD_CONVERT_FILE_NAME,
+    THREAD_FINAL_FILE_NAME,
     RUN_INCLUDED_ITEMS,
     RUN_LIMITATION_ITEMS,
-    render_thread_timeline,
-    render_timeline_index,
 )
 
-PARSER_VERSION = 1
-RENDER_CONTRACT_VERSION = 1
+PARSER_VERSION = 2
+RENDER_CONTRACT_VERSION = 2
 THREAD_CACHE_SCHEMA_VERSION = 1
 
 THREAD_CACHE_FILES = {
-    "timeline": "timeline.md",
+    "convert": "convert.json",
+    "thread": "thread.json",
     "events": "events.json",
     "transcript_entries": "transcript_entries.json",
     "environment_observations": "environment_observations.json",
@@ -77,8 +80,9 @@ def process_job(job_dir: Path) -> None:
         previous_catalog = load_previous_catalog(job_dir)
         previous_threads = _catalog_threads_by_id(previous_catalog)
 
+        outputs_root = job_dir.parent
         environment_root = ensure_dir(job_dir / "environment")
-        threads_root = ensure_dir(job_dir / "threads")
+        cache_threads_root = ensure_dir(job_dir / "cache" / "threads")
         total_threads = max(1, len(request.selected_threads))
         for index, thread in enumerate(request.selected_threads, start=1):
             thread_started = time.perf_counter()
@@ -87,11 +91,15 @@ def process_job(job_dir: Path) -> None:
                 thread.session_path = str(resolved_session_path)
             source_fingerprint = _file_fingerprint(resolved_session_path)
             thread_cache_key = build_thread_cache_key(request, thread, source_fingerprint)
+            source_type = _source_type_from_path(resolved_session_path)
+            export_thread_dir = export_thread_dir_name(thread.thread_id)
 
             status.current_thread_id = thread.thread_id
             status.current_thread_title = thread.preferred_title
-            thread_dir = ensure_dir(threads_root / thread.thread_id)
-            timeline_path = thread_dir / "timeline.md"
+            thread_dir = ensure_dir(cache_threads_root / thread.thread_id)
+            master_thread_dir = ensure_dir(outputs_root / export_thread_dir)
+            convert_path = master_thread_dir / THREAD_CONVERT_FILE_NAME
+            thread_path = master_thread_dir / THREAD_FINAL_FILE_NAME
             previous_thread = previous_threads.get(thread.thread_id)
             reused = try_reuse_thread_cache(previous_thread, thread_cache_key, thread_dir)
             if reused:
@@ -104,6 +112,12 @@ def process_job(job_dir: Path) -> None:
                     thread_dir / THREAD_CACHE_FILES["environment_observations"]
                 )
                 segments = _read_json_list(thread_dir / THREAD_CACHE_FILES["segments"])
+                cached_convert_path = thread_dir / THREAD_CACHE_FILES["convert"]
+                cached_thread_path = thread_dir / THREAD_CACHE_FILES["thread"]
+                if cached_convert_path.exists():
+                    shutil.copy2(cached_convert_path, convert_path)
+                if cached_thread_path.exists():
+                    shutil.copy2(cached_thread_path, thread_path)
                 reused_thread_count += 1
                 append_log(log_path, f"Reused {thread.thread_id} events={len(events)}")
             else:
@@ -115,20 +129,13 @@ def process_job(job_dir: Path) -> None:
                     thread,
                     include_tool_outputs=request.include_tool_outputs,
                     redaction_profile=request.redaction_profile,
-                    date_from=request.date_from,
-                    date_to=request.date_to,
                 )
                 transcript_entries = parse_thread_transcript_entries(
                     thread,
                     redaction_profile=request.redaction_profile,
-                    date_from=request.date_from,
-                    date_to=request.date_to,
+                    include_compaction_recovery=request.include_compaction_recovery,
                 )
-                thread_environment_observations = parse_thread_environment_observations(
-                    thread,
-                    date_from=request.date_from,
-                    date_to=request.date_to,
-                )
+                thread_environment_observations = parse_thread_environment_observations(thread)
                 if not thread.cwd:
                     thread.cwd = next(
                         (
@@ -139,17 +146,41 @@ def process_job(job_dir: Path) -> None:
                         thread.cwd,
                     )
                 segments = build_segments(events)
+                limitations = _build_thread_limitations(
+                    resolved_session_path=resolved_session_path,
+                    transcript_entries=transcript_entries,
+                )
 
                 status.current_stage = "rendering"
                 status.message = f"Rendering {thread.preferred_title or thread.thread_id}"
                 write_status(job_dir, status)
 
-                timeline_markdown = render_thread_timeline(thread, transcript_entries)
-                write_text(timeline_path, timeline_markdown)
+                conversation_payload = build_thread_conversation_payload(
+                    thread=thread,
+                    transcript_rows=transcript_entries,
+                    limitations=limitations,
+                )
+                convert_payload = build_thread_convert_payload(
+                    thread=thread,
+                    events=events,
+                    transcript_rows=transcript_entries,
+                    segments=segments,
+                    environment_observations=thread_environment_observations,
+                    source_fingerprint=source_fingerprint,
+                    source_type=source_type,
+                    limitations=limitations,
+                    cache_key=thread_cache_key,
+                    parser_version=PARSER_VERSION,
+                    render_contract_version=RENDER_CONTRACT_VERSION,
+                )
+                write_json_atomic(thread_path, conversation_payload)
+                write_json_atomic(convert_path, convert_payload)
                 write_thread_cache_artifacts(
                     thread_dir=thread_dir,
                     cache_key=thread_cache_key,
                     source_fingerprint=source_fingerprint,
+                    convert_payload=convert_payload,
+                    thread_payload=conversation_payload,
                     events=events,
                     transcript_entries=transcript_entries,
                     environment_observations=thread_environment_observations,
@@ -159,7 +190,8 @@ def process_job(job_dir: Path) -> None:
                 append_log(log_path, f"Processed {thread.thread_id} events={len(events)}")
 
             processing_duration_ms = round((time.perf_counter() - thread_started) * 1000.0, 3)
-            timeline_fingerprint = _file_fingerprint(timeline_path)
+            convert_fingerprint = _file_fingerprint(convert_path)
+            thread_fingerprint = _file_fingerprint(thread_path)
             if source_fingerprint is not None:
                 source_catalog_by_path[str(source_fingerprint["path"])] = source_fingerprint
 
@@ -171,20 +203,26 @@ def process_job(job_dir: Path) -> None:
                     source_root_path=thread.source_root_path,
                     status="completed",
                     event_count=len(events),
-                    timeline_path=str(timeline_path),
+                    thread_path=str(thread_path),
                 )
             )
 
+            limitations = _build_thread_limitations(
+                resolved_session_path=resolved_session_path,
+                transcript_entries=transcript_entries,
+            )
             thread_row = {
                 "thread_id": thread.thread_id,
                 "preferred_title": thread.preferred_title,
-                "timeline_path": str(timeline_path),
+                "convert_path": str(convert_path),
+                "thread_path": str(thread_path),
+                "export_thread_dir": export_thread_dir,
                 "event_count": len(events),
                 "message_count": len(transcript_entries),
                 "segment_count": len(segments),
                 "source_root_kind": thread.source_root_kind,
                 "resolved_session_path": str(resolved_session_path) if resolved_session_path is not None else "",
-                "source_type": _source_type_from_path(resolved_session_path),
+                "source_type": source_type,
                 "cwd": thread.cwd,
                 "updated_at": thread.updated_at,
                 "cache_status": "reused" if reused else "rendered",
@@ -196,10 +234,7 @@ def process_job(job_dir: Path) -> None:
                     for entry in transcript_entries
                     if isinstance(entry.get("attachments"), list)
                 ),
-                "limitations": _build_thread_limitations(
-                    resolved_session_path=resolved_session_path,
-                    transcript_entries=transcript_entries,
-                ),
+                "limitations": limitations,
             }
             thread_rows.append(thread_row)
             thread_catalog_rows.append(
@@ -211,8 +246,10 @@ def process_job(job_dir: Path) -> None:
                     "source_root_kind": thread.source_root_kind,
                     "message_count": len(transcript_entries),
                     "event_count": len(events),
-                    "timeline_path": str(timeline_path),
-                    "timeline_sha256": timeline_fingerprint["sha256"] if timeline_fingerprint is not None else "",
+                    "convert_path": str(convert_path),
+                    "convert_sha256": convert_fingerprint["sha256"] if convert_fingerprint is not None else "",
+                    "thread_path": str(thread_path),
+                    "thread_sha256": thread_fingerprint["sha256"] if thread_fingerprint is not None else "",
                     "parser_version": PARSER_VERSION,
                     "render_contract_version": RENDER_CONTRACT_VERSION,
                     "cache_key": thread_cache_key,
@@ -277,16 +314,16 @@ def process_job(job_dir: Path) -> None:
         write_json_atomic(job_dir / "processing_profile.json", processing_profile)
         write_json_atomic(job_dir / "update_manifest.json", update_manifest)
 
-        _assign_export_names(thread_rows)
-
-        timeline_index_path = threads_root / "index.md"
-        export_readme_path = job_dir / "readme.html"
-
-        timeline_index_text = render_timeline_index(request.job_id, thread_rows)
-        export_readme_html = render_export_readme_html(request.job_id, thread_rows)
-
-        write_text(timeline_index_path, timeline_index_text)
-        write_text(export_readme_path, export_readme_html)
+        readme_path = job_dir / "README.md"
+        generated_at = now_iso()
+        write_text(
+            readme_path,
+            render_export_readme_md(
+                request.job_id,
+                generated_at=generated_at,
+                thread_rows=thread_rows,
+            ),
+        )
 
         status.current_stage = "archiving"
         status.message = "Building ZIP archive."
@@ -301,7 +338,6 @@ def process_job(job_dir: Path) -> None:
             thread_count=len(thread_rows),
             event_count=total_event_count,
             segment_count=total_segment_count,
-            timeline_index_path=str(timeline_index_path),
             archive_path=str(archive_path),
             warnings=status.warnings,
         )
@@ -380,26 +416,14 @@ def build_run_archive(job_dir: Path, thread_rows: list[dict[str, object]]) -> Pa
     ensure_dir(archive_path.parent)
 
     with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as archive:
-        _write_if_exists(archive, job_dir / "readme.html", "readme.html")
         _write_if_exists(archive, job_dir / "README.md", "README.md")
-        _write_if_exists(archive, job_dir / "NOTICE.md", "NOTICE.md")
-        _write_if_exists(archive, job_dir / "fidelity_report.md", "fidelity_report.md")
-        _write_if_exists(archive, job_dir / "fidelity_report.json", "fidelity_report.json")
-        _write_if_exists(archive, job_dir / "catalog.json", "catalog.json")
-        _write_if_exists(archive, job_dir / "processing_profile.json", "processing_profile.json")
-        _write_if_exists(archive, job_dir / "update_manifest.json", "update_manifest.json")
-        _write_if_exists(archive, job_dir / "manifest.json", "manifest.json")
-        _write_if_exists(archive, job_dir / "status.json", "status.json")
-        _write_if_exists(archive, job_dir / "result.json", "result.json")
-        _write_if_exists(archive, job_dir / "threads" / "index.md", "threads/index.md")
-        _write_if_exists(archive, job_dir / "environment" / "observations.jsonl", "environment/observations.jsonl")
-        _write_if_exists(archive, job_dir / "environment" / "ledger.json", "environment/ledger.json")
-        _write_if_exists(archive, job_dir / "environment" / "ledger.md", "environment/ledger.md")
 
         for row in thread_rows:
-            timeline_path = Path(str(row["timeline_path"]))
-            archive_name = str(row["export_markdown_name"])
-            _write_if_exists(archive, timeline_path, f"threads/{archive_name}")
+            export_thread_dir = str(row["export_thread_dir"])
+            convert_path = Path(str(row["convert_path"]))
+            thread_path = Path(str(row["thread_path"]))
+            _write_if_exists(archive, convert_path, f"{export_thread_dir}/{THREAD_CONVERT_FILE_NAME}")
+            _write_if_exists(archive, thread_path, f"{export_thread_dir}/{THREAD_FINAL_FILE_NAME}")
 
     return archive_path
 
@@ -430,7 +454,7 @@ def write_current_artifact_pointer(
             "updated_at": completed_at or now_iso(),
             "run_directory": str(job_dir),
             "archive_path": str(archive_path),
-            "readme_path": str(job_dir / "readme.html"),
+            "readme_path": str(job_dir / "README.md"),
             "catalog_path": str(job_dir / "catalog.json"),
             "processing_profile_path": str(job_dir / "processing_profile.json"),
             "update_manifest_path": str(job_dir / "update_manifest.json"),
@@ -462,9 +486,8 @@ def build_thread_cache_key(
         "render_contract_version": RENDER_CONTRACT_VERSION,
         "request": {
             "include_tool_outputs": request.include_tool_outputs,
+            "include_compaction_recovery": request.include_compaction_recovery,
             "redaction_profile": request.redaction_profile,
-            "date_from": request.date_from,
-            "date_to": request.date_to,
         },
         "thread": {
             "thread_id": thread.thread_id,
@@ -515,11 +538,15 @@ def write_thread_cache_artifacts(
     thread_dir: Path,
     cache_key: str,
     source_fingerprint: dict[str, object] | None,
+    convert_payload: dict[str, object],
+    thread_payload: dict[str, object],
     events: list[dict[str, object]],
     transcript_entries: list[dict[str, object]],
     environment_observations: list[dict[str, object]],
     segments: list[dict[str, object]],
 ) -> None:
+    write_json_atomic(thread_dir / THREAD_CACHE_FILES["convert"], convert_payload)
+    write_json_atomic(thread_dir / THREAD_CACHE_FILES["thread"], thread_payload)
     write_json_atomic(thread_dir / THREAD_CACHE_FILES["events"], events)
     write_json_atomic(thread_dir / THREAD_CACHE_FILES["transcript_entries"], transcript_entries)
     write_json_atomic(thread_dir / THREAD_CACHE_FILES["environment_observations"], environment_observations)
@@ -557,13 +584,6 @@ def _read_json_list(path: Path) -> list[dict[str, object]]:
 def _write_if_exists(archive: ZipFile, path: Path, archive_name: str) -> None:
     if path.exists():
         archive.write(path, archive_name)
-
-
-def _assign_export_names(thread_rows: list[dict[str, object]]) -> None:
-    for row in thread_rows:
-        preferred_title = str(row.get("preferred_title") or "")
-        thread_id = str(row.get("thread_id") or "")
-        row["export_markdown_name"] = export_thread_markdown_name(preferred_title, thread_id)
 
 
 def build_fidelity_report(job_id: str, thread_rows: list[dict[str, object]]) -> dict[str, object]:
@@ -795,7 +815,8 @@ def _classify_thread_update(
         "source_refs",
         "source_type",
         "cache_key",
-        "timeline_sha256",
+        "convert_sha256",
+        "thread_sha256",
         "parser_version",
         "render_contract_version",
         "message_count",
@@ -839,6 +860,12 @@ def _build_thread_limitations(
         for entry in transcript_entries
     ):
         rows.append("Attachment labels were preserved, but binary attachment contents were not exported.")
+
+    if any(str(entry.get("source") or "") == "compaction_replacement_history" for entry in transcript_entries):
+        rows.append(
+            "Some transcript messages were recovered from compaction replacement_history. "
+            "Their timestamps are compaction observation times, not original send times."
+        )
 
     return rows
 

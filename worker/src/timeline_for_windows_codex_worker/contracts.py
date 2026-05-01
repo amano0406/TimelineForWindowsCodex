@@ -72,10 +72,9 @@ class JobRequest:
     primary_codex_home_path: str = ""
     backup_codex_home_paths: list[str] = field(default_factory=list)
     include_archived_sources: bool = True
-    include_tool_outputs: bool = True
+    include_tool_outputs: bool = False
+    include_compaction_recovery: bool = False
     redaction_profile: str = "strict"
-    date_from: str | None = None
-    date_to: str | None = None
     selected_threads: list[ThreadSelection] = field(default_factory=list)
 
     @classmethod
@@ -87,10 +86,9 @@ class JobRequest:
             primary_codex_home_path=str(payload.get("primary_codex_home_path") or ""),
             backup_codex_home_paths=list(payload.get("backup_codex_home_paths") or []),
             include_archived_sources=bool(payload.get("include_archived_sources", True)),
-            include_tool_outputs=bool(payload.get("include_tool_outputs", True)),
+            include_tool_outputs=bool(payload.get("include_tool_outputs", False)),
+            include_compaction_recovery=bool(payload.get("include_compaction_recovery", False)),
             redaction_profile=str(payload.get("redaction_profile") or "strict"),
-            date_from=payload.get("date_from"),
-            date_to=payload.get("date_to"),
             selected_threads=[
                 ThreadSelection.from_dict(item)
                 for item in payload.get("selected_threads", [])
@@ -106,9 +104,8 @@ class JobRequest:
             "backup_codex_home_paths": self.backup_codex_home_paths,
             "include_archived_sources": self.include_archived_sources,
             "include_tool_outputs": self.include_tool_outputs,
+            "include_compaction_recovery": self.include_compaction_recovery,
             "redaction_profile": self.redaction_profile,
-            "date_from": self.date_from,
-            "date_to": self.date_to,
             "selected_threads": [item.to_dict() for item in self.selected_threads],
         }
 
@@ -145,7 +142,6 @@ class JobResult:
     thread_count: int = 0
     event_count: int = 0
     segment_count: int = 0
-    timeline_index_path: str | None = None
     handoff_path: str | None = None
     archive_path: str | None = None
     warnings: list[str] = field(default_factory=list)
@@ -162,7 +158,7 @@ class ManifestThreadItem:
     source_root_path: str
     status: str = "pending"
     event_count: int = 0
-    timeline_path: str | None = None
+    thread_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

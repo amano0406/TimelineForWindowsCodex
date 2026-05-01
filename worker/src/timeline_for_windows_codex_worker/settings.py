@@ -23,7 +23,8 @@ class RuntimeDefaults:
     default_backup_codex_home_paths: list[str] | None = None
     default_redaction_profile: str = "strict"
     default_include_archived_sources: bool = True
-    default_include_tool_outputs: bool = True
+    default_include_tool_outputs: bool = False
+    default_include_compaction_recovery: bool = False
 
     def __post_init__(self) -> None:
         if self.default_backup_codex_home_paths is None:
@@ -38,6 +39,7 @@ class UserSettings:
     redaction_profile: str = ""
     include_archived_sources: bool | None = None
     include_tool_outputs: bool | None = None
+    include_compaction_recovery: bool | None = None
 
     def __post_init__(self) -> None:
         if self.source_roots is None:
@@ -56,6 +58,7 @@ class UserSettings:
             redaction_profile=str(payload.get("redaction_profile") or "").strip().lower(),
             include_archived_sources=_optional_bool(payload.get("include_archived_sources")),
             include_tool_outputs=_optional_bool(payload.get("include_tool_outputs")),
+            include_compaction_recovery=_optional_bool(payload.get("include_compaction_recovery")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -66,6 +69,7 @@ class UserSettings:
             "redaction_profile": self.redaction_profile,
             "include_archived_sources": self.include_archived_sources,
             "include_tool_outputs": self.include_tool_outputs,
+            "include_compaction_recovery": self.include_compaction_recovery,
         }
 
 
@@ -163,7 +167,10 @@ def load_runtime_defaults(runtime_paths: RuntimePaths | None = None) -> RuntimeD
             default_include_archived_sources=bool(
                 payload.get("default_include_archived_sources", True)
             ),
-            default_include_tool_outputs=bool(payload.get("default_include_tool_outputs", True)),
+            default_include_tool_outputs=bool(payload.get("default_include_tool_outputs", False)),
+            default_include_compaction_recovery=bool(
+                payload.get("default_include_compaction_recovery", False)
+            ),
         )
 
     return RuntimeDefaults()

@@ -50,34 +50,6 @@ def _apply_redaction(text: str, *, profile: str) -> str:
     return text
 
 
-def _date_key(iso_timestamp: str | None) -> str | None:
-    if not iso_timestamp:
-        return None
-    try:
-        return datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00")).date().isoformat()
-    except ValueError:
-        return None
-
-
-def _within_date_range(
-    timestamp: str | None,
-    *,
-    date_from: str | None,
-    date_to: str | None,
-) -> bool:
-    if not date_from and not date_to:
-        return True
-
-    event_date = _date_key(timestamp)
-    if event_date is None:
-        return False
-    if date_from and event_date < date_from:
-        return False
-    if date_to and event_date > date_to:
-        return False
-    return True
-
-
 def _extract_text_from_message_payload(payload: dict[str, Any], *, profile: str) -> str:
     content = payload.get("content")
     if not isinstance(content, list):
@@ -155,8 +127,6 @@ def parse_thread_events(
     *,
     include_tool_outputs: bool,
     redaction_profile: str,
-    date_from: str | None,
-    date_to: str | None,
 ) -> list[dict[str, Any]]:
     source_path = resolve_thread_session_path(thread)
     if source_path is None:
@@ -167,8 +137,6 @@ def parse_thread_events(
             source_path,
             thread,
             redaction_profile=redaction_profile,
-            date_from=date_from,
-            date_to=date_to,
         )
 
     return _parse_session_jsonl_events(
@@ -176,8 +144,6 @@ def parse_thread_events(
         thread,
         include_tool_outputs=include_tool_outputs,
         redaction_profile=redaction_profile,
-        date_from=date_from,
-        date_to=date_to,
     )
 
 
@@ -185,8 +151,7 @@ def parse_thread_transcript_entries(
     thread: ThreadSelection,
     *,
     redaction_profile: str,
-    date_from: str | None,
-    date_to: str | None,
+    include_compaction_recovery: bool,
 ) -> list[dict[str, Any]]:
     source_path = resolve_thread_session_path(thread)
     if source_path is None:
@@ -197,24 +162,18 @@ def parse_thread_transcript_entries(
             source_path,
             thread,
             redaction_profile=redaction_profile,
-            date_from=date_from,
-            date_to=date_to,
         )
 
     return _parse_session_jsonl_transcript_entries(
         source_path,
         thread,
         redaction_profile=redaction_profile,
-        date_from=date_from,
-        date_to=date_to,
+        include_compaction_recovery=include_compaction_recovery,
     )
 
 
 def parse_thread_environment_observations(
     thread: ThreadSelection,
-    *,
-    date_from: str | None,
-    date_to: str | None,
 ) -> list[dict[str, Any]]:
     source_path = resolve_thread_session_path(thread)
     if source_path is None:
@@ -224,15 +183,11 @@ def parse_thread_environment_observations(
         return _parse_thread_read_environment_observations(
             source_path,
             thread,
-            date_from=date_from,
-            date_to=date_to,
         )
 
     return _parse_session_jsonl_environment_observations(
         source_path,
         thread,
-        date_from=date_from,
-        date_to=date_to,
     )
 
 
@@ -267,37 +222,83 @@ def _candidate_source_roots(source_root: Path, thread_id: str) -> list[tuple[Pat
     return deduped
 
 
-def _iter_session_jsonl_payload_roots(session_path: Path) -> Iterator[dict[str, Any]]:
+def _iter_session_jsonl_payload_roots(
+    session_path: Path,
+    *,
+    include_compacted: bool = False,
+    include_diagnostics: bool = False,
+) -> Iterator[dict[str, Any]]:
     buffer: list[str] = []
 
-    for raw_line in session_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not raw_line.strip():
-            continue
+    with session_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            raw_line = raw_line.rstrip("\n")
+            if not raw_line.strip():
+                continue
 
-        # Some Codex logs include raw multi-line tool output inside a JSON string.
-        # When that happens, keep appending until the record becomes valid, or drop the
-        # malformed buffered record once the next clear record start is encountered.
-        if buffer and _SESSION_RECORD_START_RE.match(raw_line):
+            # Compaction records can contain a very large replacement_history. Avoid
+            # materializing that JSON unless a deep compaction recovery run asked for it.
+            if not include_compacted and _SESSION_RECORD_START_RE.match(raw_line) and _is_compacted_record_line(raw_line):
+                if buffer:
+                    payload_root = _try_load_session_payload_root("\n".join(buffer))
+                    if payload_root is not None:
+                        yield payload_root
+                    buffer = []
+                continue
+
+            if not include_diagnostics and _SESSION_RECORD_START_RE.match(raw_line) and _is_diagnostic_record_line(raw_line):
+                if buffer:
+                    payload_root = _try_load_session_payload_root("\n".join(buffer))
+                    if payload_root is not None:
+                        yield payload_root
+                    buffer = []
+                continue
+
+            # Some Codex logs include raw multi-line tool output inside a JSON string.
+            # When that happens, keep appending until the record becomes valid, or drop the
+            # malformed buffered record once the next clear record start is encountered.
+            if buffer and _SESSION_RECORD_START_RE.match(raw_line):
+                payload_root = _try_load_session_payload_root("\n".join(buffer))
+                if payload_root is not None:
+                    yield payload_root
+                buffer = [raw_line]
+                payload_root = _try_load_session_payload_root(raw_line)
+                if payload_root is not None:
+                    yield payload_root
+                    buffer = []
+                continue
+
+            buffer.append(raw_line)
             payload_root = _try_load_session_payload_root("\n".join(buffer))
             if payload_root is not None:
                 yield payload_root
-            buffer = [raw_line]
-            payload_root = _try_load_session_payload_root(raw_line)
-            if payload_root is not None:
-                yield payload_root
                 buffer = []
-            continue
-
-        buffer.append(raw_line)
-        payload_root = _try_load_session_payload_root("\n".join(buffer))
-        if payload_root is not None:
-            yield payload_root
-            buffer = []
 
     if buffer:
         payload_root = _try_load_session_payload_root("\n".join(buffer))
         if payload_root is not None:
             yield payload_root
+
+
+def _is_compacted_record_line(raw_line: str) -> bool:
+    return '"type":"compacted"' in raw_line or '"type": "compacted"' in raw_line
+
+
+def _is_diagnostic_record_line(raw_line: str) -> bool:
+    diagnostic_types = (
+        '"type":"reasoning"',
+        '"type": "reasoning"',
+        '"type":"function_call"',
+        '"type": "function_call"',
+        '"type":"custom_tool_call"',
+        '"type": "custom_tool_call"',
+        '"type":"function_call_output"',
+        '"type": "function_call_output"',
+        '"type":"custom_tool_call_output"',
+        '"type": "custom_tool_call_output"',
+    )
+    is_response_item = '"type":"response_item"' in raw_line or '"type": "response_item"' in raw_line
+    return is_response_item and any(item in raw_line for item in diagnostic_types)
 
 
 def _try_load_session_payload_root(raw_text: str) -> dict[str, Any] | None:
@@ -314,17 +315,15 @@ def _parse_session_jsonl_events(
     *,
     include_tool_outputs: bool,
     redaction_profile: str,
-    date_from: str | None,
-    date_to: str | None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     sequence = 0
 
-    for payload_root in _iter_session_jsonl_payload_roots(session_path):
+    for payload_root in _iter_session_jsonl_payload_roots(
+        session_path,
+        include_diagnostics=include_tool_outputs,
+    ):
         timestamp = payload_root.get("timestamp")
-        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
-            continue
-
         item_type = str(payload_root.get("type") or "")
         payload = payload_root.get("payload") or {}
         if not isinstance(payload, dict):
@@ -480,20 +479,20 @@ def _parse_session_jsonl_transcript_entries(
     thread: ThreadSelection,
     *,
     redaction_profile: str,
-    date_from: str | None,
-    date_to: str | None,
+    include_compaction_recovery: bool,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    fallback_rows: list[dict[str, Any]] = []
     sequence = 0
-    fallback_sequence = 0
     current_mode: str | None = None
+    normal_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+    seen_recovered_keys: set[tuple[str, str, tuple[str, ...]]] = set()
 
-    for payload_root in _iter_session_jsonl_payload_roots(session_path):
+    for payload_root in _iter_session_jsonl_payload_roots(
+        session_path,
+        include_compacted=include_compaction_recovery,
+        include_diagnostics=False,
+    ):
         timestamp = payload_root.get("timestamp")
-        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
-            continue
-
         item_type = str(payload_root.get("type") or "")
         payload = payload_root.get("payload") or {}
         if not isinstance(payload, dict):
@@ -505,6 +504,19 @@ def _parse_session_jsonl_transcript_entries(
                 current_mode = str(collaboration_mode.get("mode") or "").strip().lower() or None
             continue
 
+        if item_type == "compacted" and include_compaction_recovery:
+            compacted_rows, sequence = _extract_compaction_transcript_rows(
+                payload,
+                thread,
+                timestamp=timestamp,
+                redaction_profile=redaction_profile,
+                start_sequence=sequence,
+                skip_keys=normal_keys,
+                seen_recovered_keys=seen_recovered_keys,
+            )
+            rows.extend(compacted_rows)
+            continue
+
         if item_type == "response_item":
             response_type = str(payload.get("type") or "")
             role = str(payload.get("role") or "").strip().lower()
@@ -513,6 +525,8 @@ def _parse_session_jsonl_transcript_entries(
                 if _should_skip_transcript_message(role, raw_text):
                     continue
                 if raw_text or attachments:
+                    dedupe_key = _make_transcript_dedupe_key(role, raw_text, attachments)
+                    normal_keys.add(dedupe_key)
                     sequence += 1
                     rows.append(
                         {
@@ -524,6 +538,7 @@ def _parse_session_jsonl_transcript_entries(
                             "mode": current_mode if role == "user" else None,
                             "text": sanitize_multiline_text(raw_text, profile=redaction_profile),
                             "attachments": attachments,
+                            "_dedupe_key": dedupe_key,
                         }
                     )
                 continue
@@ -531,40 +546,174 @@ def _parse_session_jsonl_transcript_entries(
         if item_type == "event_msg":
             event_type = str(payload.get("type") or "")
             if event_type in {"user_message", "agent_message"}:
-                fallback_sequence += 1
-                fallback_rows.append(
+                role = "user" if event_type == "user_message" else "assistant"
+                raw_text = str(payload.get("message") or "")
+                attachments = _extract_event_message_attachments(payload)
+                dedupe_key = _make_transcript_dedupe_key(role, raw_text, attachments)
+                normal_keys.add(dedupe_key)
+                sequence += 1
+                rows.append(
                     {
                         "timestamp": timestamp,
-                        "sequence": fallback_sequence,
+                        "sequence": sequence,
                         "thread_id": thread.thread_id,
-                        "actor": "user" if event_type == "user_message" else "assistant",
+                        "actor": role,
                         "phase": str(payload.get("phase") or "conversation"),
                         "mode": current_mode if event_type == "user_message" else None,
-                        "text": sanitize_multiline_text(
-                            str(payload.get("message") or ""),
-                            profile=redaction_profile,
-                        ),
-                        "attachments": _extract_event_message_attachments(payload),
+                        "text": sanitize_multiline_text(raw_text, profile=redaction_profile),
+                        "attachments": attachments,
+                        "_dedupe_key": dedupe_key,
                     }
                 )
 
-    return rows or fallback_rows
+    return _dedupe_transcript_rows(
+        sorted(
+            [
+                row
+                for row in rows
+                if not _is_compaction_recovered_row(row) or _transcript_row_key(row) not in normal_keys
+            ],
+            key=lambda row: (
+                str(row.get("timestamp") or ""),
+                1 if _is_compaction_recovered_row(row) else 0,
+                int(row.get("sequence") or 0),
+            ),
+        )
+    )
+
+
+def _extract_compaction_transcript_rows(
+    payload: dict[str, Any],
+    thread: ThreadSelection,
+    *,
+    timestamp: Any,
+    redaction_profile: str,
+    start_sequence: int,
+    skip_keys: set[tuple[str, str, tuple[str, ...]]],
+    seen_recovered_keys: set[tuple[str, str, tuple[str, ...]]],
+) -> tuple[list[dict[str, Any]], int]:
+    replacement_history = payload.get("replacement_history")
+    if not isinstance(replacement_history, list):
+        return [], start_sequence
+
+    rows: list[dict[str, Any]] = []
+    sequence = start_sequence
+    for item in replacement_history:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("type") or "") != "message":
+            continue
+
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+
+        raw_text, attachments = _extract_response_message_transcript_parts(item)
+        if _should_skip_transcript_message(role, raw_text):
+            continue
+        if not raw_text and not attachments:
+            continue
+        key = _make_transcript_dedupe_key(role, raw_text, attachments)
+        if key in skip_keys or key in seen_recovered_keys:
+            continue
+        seen_recovered_keys.add(key)
+
+        sequence += 1
+        rows.append(
+            {
+                "timestamp": timestamp,
+                "sequence": sequence,
+                "thread_id": thread.thread_id,
+                "actor": role,
+                "phase": str(item.get("phase") or "conversation"),
+                "mode": None,
+                "text": sanitize_multiline_text(raw_text, profile=redaction_profile),
+                "attachments": attachments,
+                "source": "compaction_replacement_history",
+                "timestamp_kind": "compaction_observed_at",
+                "_dedupe_key": key,
+            }
+        )
+
+    return rows, sequence
+
+
+def _dedupe_transcript_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normal_keys = {
+        _transcript_row_key(row)
+        for row in rows
+        if not _is_compaction_recovered_row(row)
+    }
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    deduped: list[dict[str, Any]] = []
+
+    for row in rows:
+        key = _transcript_row_key(row)
+        if _is_compaction_recovered_row(row) and key in normal_keys:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned_row = dict(row)
+        cleaned_row.pop("_dedupe_key", None)
+        deduped.append(cleaned_row)
+
+    for index, row in enumerate(deduped, start=1):
+        row["sequence"] = index
+    return deduped
+
+
+def _transcript_row_key(row: dict[str, Any]) -> tuple[str, str, tuple[str, ...]]:
+    dedupe_key = row.get("_dedupe_key")
+    if (
+        isinstance(dedupe_key, tuple)
+        and len(dedupe_key) == 3
+        and isinstance(dedupe_key[0], str)
+        and isinstance(dedupe_key[1], str)
+        and isinstance(dedupe_key[2], tuple)
+    ):
+        return dedupe_key
+
+    attachments = row.get("attachments") or []
+    normalized_attachments = tuple(
+        str(item or "").strip()
+        for item in attachments
+        if str(item or "").strip()
+    ) if isinstance(attachments, list) else ()
+    return (
+        str(row.get("actor") or "").strip().lower(),
+        _normalize_raw_text(str(row.get("text") or "")).strip(),
+        normalized_attachments,
+    )
+
+
+def _make_transcript_dedupe_key(
+    actor: str,
+    raw_text: str,
+    attachments: list[str],
+) -> tuple[str, str, tuple[str, ...]]:
+    normalized_text = _normalize_raw_text(raw_text).strip()
+    text_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+    normalized_attachments = tuple(
+        str(item or "").strip()
+        for item in attachments
+        if str(item or "").strip()
+    )
+    return (actor.strip().lower(), text_hash, normalized_attachments)
+
+
+def _is_compaction_recovered_row(row: dict[str, Any]) -> bool:
+    return str(row.get("source") or "") == "compaction_replacement_history"
 
 
 def _parse_session_jsonl_environment_observations(
     session_path: Path,
     thread: ThreadSelection,
-    *,
-    date_from: str | None,
-    date_to: str | None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
     for payload_root in _iter_session_jsonl_payload_roots(session_path):
         timestamp = payload_root.get("timestamp")
-        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
-            continue
-
         item_type = str(payload_root.get("type") or "")
         payload = payload_root.get("payload") or {}
         if not isinstance(payload, dict):
@@ -649,8 +798,6 @@ def _parse_thread_read_events(
     thread: ThreadSelection,
     *,
     redaction_profile: str,
-    date_from: str | None,
-    date_to: str | None,
 ) -> list[dict[str, Any]]:
     payload_root = json.loads(source_path.read_text(encoding="utf-8", errors="replace"))
     thread_payload = _extract_thread_read_thread(payload_root)
@@ -671,9 +818,6 @@ def _parse_thread_read_events(
 
         sequence += 1
         timestamp = _offset_timestamp(base_timestamp, sequence - 1)
-        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
-            return
-
         event["timestamp"] = timestamp
         event["sequence"] = sequence
         event["thread_id"] = thread.thread_id
@@ -790,8 +934,6 @@ def _parse_thread_read_transcript_entries(
     thread: ThreadSelection,
     *,
     redaction_profile: str,
-    date_from: str | None,
-    date_to: str | None,
 ) -> list[dict[str, Any]]:
     payload_root = json.loads(source_path.read_text(encoding="utf-8", errors="replace"))
     thread_payload = _extract_thread_read_thread(payload_root)
@@ -811,9 +953,6 @@ def _parse_thread_read_transcript_entries(
             return
 
         timestamp = _offset_timestamp(base_timestamp, sequence)
-        if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
-            return
-
         sequence += 1
         entry["timestamp"] = timestamp
         entry["sequence"] = sequence
@@ -867,9 +1006,6 @@ def _parse_thread_read_transcript_entries(
 def _parse_thread_read_environment_observations(
     source_path: Path,
     thread: ThreadSelection,
-    *,
-    date_from: str | None,
-    date_to: str | None,
 ) -> list[dict[str, Any]]:
     payload_root = json.loads(source_path.read_text(encoding="utf-8", errors="replace"))
     thread_payload = _extract_thread_read_thread(payload_root)
@@ -880,9 +1016,6 @@ def _parse_thread_read_environment_observations(
         thread_payload.get("createdAt"),
         fallback=thread_payload.get("updatedAt"),
     )
-    if not _within_date_range(timestamp, date_from=date_from, date_to=date_to):
-        return []
-
     runtime_payload = {
         "cli_version": str(thread_payload.get("cliVersion") or "").strip(),
         "originator": "",

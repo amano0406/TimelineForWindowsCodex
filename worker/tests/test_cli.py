@@ -38,7 +38,7 @@ class WorkerCliTests(unittest.TestCase):
             return_value=False,
         ):
             with redirect_stdout(stdout), redirect_stderr(stderr):
-                exit_code = main(["settings", "show"])
+                exit_code = main(["settings", "status"])
 
         self.assertEqual(exit_code, 1)
         self.assertEqual(stdout.getvalue(), "")
@@ -51,62 +51,80 @@ class WorkerCliTests(unittest.TestCase):
 
         self.assertEqual(runtime.settings_path, (REPO_ROOT / "settings.json").resolve())
 
-    def test_discover_cli_returns_current_and_archived_threads(self) -> None:
+    def test_items_list_cli_returns_current_and_archived_items(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             outputs_root = Path(temp_dir) / "outputs"
             stdout, _stderr, exit_code = self._invoke_cli(
                 outputs_root,
-                "discover",
+                "items", "list",
                 "--primary-root",
                 str(FIXTURE_CODEX_HOME),
                 "--backup-root",
                 str(ARCHIVED_FIXTURE_ROOT),
                 "--include-archived-sources",
-                "--format",
-                "json",
+                "--json",
             )
 
             self.assertEqual(exit_code, 0)
             payload = json.loads(stdout)
-            thread_ids = {row["thread_id"] for row in payload}
+            thread_ids = {row["item_id"] for row in payload}
             self.assertEqual(thread_ids, {FIXTURE_THREAD_ID, ARCHIVED_THREAD_ID})
 
-    def test_create_job_cli_defaults_to_all_discovered_threads(self) -> None:
+    def test_settings_inputs_list_and_remove_accepts_generated_input_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            outputs_root = Path(temp_dir) / "outputs"
-            stdout, _stderr, exit_code = self._invoke_cli(
-                outputs_root,
-                "create-job",
-                "--primary-root",
+            temp_root = Path(temp_dir)
+            appdata_root = temp_root / "appdata"
+
+            add_stdout, _stderr, add_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "settings",
+                "inputs",
+                "add",
                 str(FIXTURE_CODEX_HOME),
-                "--backup-root",
-                str(ARCHIVED_FIXTURE_ROOT),
-                "--include-archived-sources",
-                "--format",
-                "json",
+                "--json",
+                appdata_root=appdata_root,
             )
+            self.assertEqual(add_exit_code, 0)
+            add_payload = json.loads(add_stdout)
+            input_id = add_payload["inputs"][0]["input_id"]
 
-            self.assertEqual(exit_code, 0)
-            payload = json.loads(stdout)
-            self.assertEqual(payload["thread_count"], 2)
+            list_stdout, _stderr, list_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "settings",
+                "inputs",
+                "list",
+                "--json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(list_exit_code, 0)
+            list_payload = json.loads(list_stdout)
+            self.assertEqual(list_payload["inputs"][0]["input_id"], input_id)
 
-            request = read_json(Path(payload["run_directory"]) / "request.json")
-            selected_ids = {row["thread_id"] for row in request["selected_threads"]}
-            self.assertEqual(selected_ids, {FIXTURE_THREAD_ID, ARCHIVED_THREAD_ID})
+            remove_stdout, _stderr, remove_exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "settings",
+                "inputs",
+                "remove",
+                input_id,
+                "--json",
+                appdata_root=appdata_root,
+            )
+            self.assertEqual(remove_exit_code, 0)
+            remove_payload = json.loads(remove_stdout)
+            self.assertEqual(remove_payload["inputs"], [])
 
-    def test_run_cli_exports_all_threads_when_unfiltered(self) -> None:
+    def test_items_refresh_cli_exports_all_items_when_unfiltered(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             outputs_root = Path(temp_dir) / "outputs"
             stdout, _stderr, exit_code = self._invoke_cli(
                 outputs_root,
-                "run",
+                "items", "refresh",
                 "--primary-root",
                 str(FIXTURE_CODEX_HOME),
                 "--backup-root",
                 str(ARCHIVED_FIXTURE_ROOT),
                 "--include-archived-sources",
-                "--format",
-                "json",
+                "--json",
             )
 
             self.assertEqual(exit_code, 0)
@@ -116,17 +134,21 @@ class WorkerCliTests(unittest.TestCase):
 
             with ZipFile(archive_path) as archive:
                 names = set(archive.namelist())
-                zipped_status = json.loads(archive.read("status.json").decode("utf-8"))
-                zipped_result = json.loads(archive.read("result.json").decode("utf-8"))
+                first_thread = json.loads(archive.read(f"{FIXTURE_THREAD_ID}/thread.json").decode("utf-8"))
+                first_convert = json.loads(archive.read(f"{FIXTURE_THREAD_ID}/convert.json").decode("utf-8"))
 
-            self.assertIn(f"threads/{FIXTURE_THREAD_ID}.md", names)
-            self.assertIn(f"threads/{ARCHIVED_THREAD_ID}.md", names)
-            self.assertIn("environment/ledger.json", names)
-            self.assertEqual(zipped_status["state"], "completed")
-            self.assertEqual(zipped_result["state"], "completed")
+            self.assertIn("README.md", names)
+            self.assertIn(f"{FIXTURE_THREAD_ID}/thread.json", names)
+            self.assertIn(f"{FIXTURE_THREAD_ID}/convert.json", names)
+            self.assertIn(f"{ARCHIVED_THREAD_ID}/thread.json", names)
+            self.assertIn(f"{ARCHIVED_THREAD_ID}/convert.json", names)
+            self.assertNotIn("readme.html", names)
+            self.assertNotIn("status.json", names)
+            self.assertEqual(first_thread["thread"]["thread_id"], FIXTURE_THREAD_ID)
+            self.assertEqual(first_convert["thread_id"], FIXTURE_THREAD_ID)
             self.assertIn("TimelineForWindowsCodex-export-run-", archive_path.name)
 
-    def test_settings_refresh_uses_configured_sources_and_output_root(self) -> None:
+    def test_items_refresh_uses_configured_sources_and_output_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             appdata_root = temp_root / "appdata"
@@ -135,51 +157,33 @@ class WorkerCliTests(unittest.TestCase):
             settings_stdout, _stderr, settings_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
                 "settings",
-                "add-source",
+                "inputs", "add",
                 str(FIXTURE_CODEX_HOME),
-                "--format",
-                "json",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(settings_exit_code, 0)
             settings_payload = json.loads(settings_stdout)
-            self.assertEqual(settings_payload["source_roots"], [str(FIXTURE_CODEX_HOME.resolve())])
+            self.assertEqual([row["path"] for row in settings_payload["inputs"]], [str(FIXTURE_CODEX_HOME.resolve())])
             self.assertEqual(settings_payload["settings_path"], str((appdata_root / "settings.json").resolve()))
             self.assertTrue((appdata_root / "settings.json").exists())
 
             output_stdout, _stderr, output_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
                 "settings",
-                "set-output",
+                "master", "set",
                 str(outputs_root),
-                "--format",
-                "json",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(output_exit_code, 0)
             output_payload = json.loads(output_stdout)
-            self.assertEqual(output_payload["outputs_root"], str(outputs_root.resolve()))
-
-            validate_stdout, _stderr, validate_exit_code = self._invoke_cli(
-                temp_root / "ignored-outputs",
-                "settings",
-                "validate",
-                "--format",
-                "json",
-                appdata_root=appdata_root,
-            )
-            self.assertEqual(validate_exit_code, 0)
-            validate_payload = json.loads(validate_stdout)
-            self.assertTrue(validate_payload["ok"])
-            self.assertEqual(validate_payload["source_roots"][0]["path"], str(FIXTURE_CODEX_HOME.resolve()))
-            self.assertTrue(validate_payload["source_roots"][0]["readable"])
-            self.assertTrue(validate_payload["outputs_root"]["ready"])
+            self.assertEqual(output_payload["master_root"], str(outputs_root.resolve()))
 
             first_stdout, _stderr, first_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
-                "refresh",
-                "--format",
-                "json",
+                "items", "refresh",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(first_exit_code, 0)
@@ -193,9 +197,8 @@ class WorkerCliTests(unittest.TestCase):
 
             second_stdout, _stderr, second_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
-                "refresh",
-                "--format",
-                "json",
+                "items", "refresh",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(second_exit_code, 0)
@@ -205,7 +208,7 @@ class WorkerCliTests(unittest.TestCase):
             self.assertEqual(second_payload["reused_thread_count"], 1)
             self.assertEqual(second_payload["update_counts"]["unchanged"], 1)
 
-    def test_settings_init_current_and_export_current(self) -> None:
+    def test_settings_init_items_refresh_and_download(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             appdata_root = temp_root / "appdata"
@@ -220,8 +223,7 @@ class WorkerCliTests(unittest.TestCase):
                 str(FIXTURE_CODEX_HOME),
                 "--output-root",
                 str(outputs_root),
-                "--format",
-                "json",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(init_exit_code, 0)
@@ -231,34 +233,19 @@ class WorkerCliTests(unittest.TestCase):
 
             refresh_stdout, _stderr, refresh_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
-                "refresh",
-                "--format",
-                "json",
+                "items", "refresh",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(refresh_exit_code, 0)
             refresh_payload = json.loads(refresh_stdout)
 
-            current_stdout, _stderr, current_exit_code = self._invoke_cli(
-                temp_root / "ignored-outputs",
-                "current",
-                "--format",
-                "json",
-                appdata_root=appdata_root,
-            )
-            self.assertEqual(current_exit_code, 0)
-            current_payload = json.loads(current_stdout)
-            self.assertEqual(current_payload["job_id"], refresh_payload["refresh_id"])
-            self.assertTrue(current_payload["archive_exists"])
-            self.assertGreater(current_payload["archive_size_bytes"], 0)
-
             export_stdout, _stderr, export_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
-                "export-current",
+                "items", "download",
                 "--to",
                 str(export_root),
-                "--format",
-                "json",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(export_exit_code, 0)
@@ -269,11 +256,10 @@ class WorkerCliTests(unittest.TestCase):
 
             _stdout, overwrite_stderr, overwrite_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
-                "export-current",
+                "items", "download",
                 "--to",
                 str(export_root),
-                "--format",
-                "json",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(overwrite_exit_code, 1)
@@ -281,12 +267,11 @@ class WorkerCliTests(unittest.TestCase):
 
             overwrite_stdout, _stderr, final_export_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
-                "export-current",
+                "items", "download",
                 "--to",
                 str(export_root),
                 "--overwrite",
-                "--format",
-                "json",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(final_export_exit_code, 0)
@@ -296,81 +281,75 @@ class WorkerCliTests(unittest.TestCase):
             handoff_root = temp_root / "handoff"
             handoff_stdout, _stderr, handoff_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
-                "handoff",
-                "--to",
+                "items",
+                "refresh",
+                "--download-to",
                 str(handoff_root),
-                "--format",
-                "json",
+                "--json",
                 appdata_root=appdata_root,
             )
             self.assertEqual(handoff_exit_code, 0)
             handoff_payload = json.loads(handoff_stdout)
             self.assertEqual(handoff_payload["state"], "completed")
-            self.assertEqual(handoff_payload["refresh"]["state"], "completed")
-            self.assertEqual(handoff_payload["export"]["state"], "completed")
-            self.assertTrue(Path(handoff_payload["export"]["destination_path"]).exists())
+            self.assertEqual(handoff_payload["download"]["state"], "completed")
+            self.assertTrue(Path(handoff_payload["download"]["destination_path"]).exists())
 
-    def test_run_list_and_show_cli_support_single_and_multiple_thread_selection(self) -> None:
+    def test_runs_list_and_show_cli_support_single_and_multiple_item_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             outputs_root = Path(temp_dir) / "outputs"
 
             single_stdout, _stderr, single_exit_code = self._invoke_cli(
                 outputs_root,
-                "run",
+                "items", "refresh",
                 "--primary-root",
                 str(FIXTURE_CODEX_HOME),
                 "--backup-root",
                 str(ARCHIVED_FIXTURE_ROOT),
                 "--include-archived-sources",
-                "--thread-id",
+                "--item-id",
                 FIXTURE_THREAD_ID,
-                "--format",
-                "json",
+                "--json",
             )
             self.assertEqual(single_exit_code, 0)
             single_payload = json.loads(single_stdout)
             with ZipFile(single_payload["archive_path"]) as archive:
                 names = set(archive.namelist())
-                zipped_status = json.loads(archive.read("status.json").decode("utf-8"))
-                zipped_result = json.loads(archive.read("result.json").decode("utf-8"))
-            self.assertIn(f"threads/{FIXTURE_THREAD_ID}.md", names)
-            self.assertNotIn(f"threads/{ARCHIVED_THREAD_ID}.md", names)
-            self.assertIn("environment/ledger.json", names)
-            self.assertEqual(zipped_status["state"], "completed")
-            self.assertEqual(zipped_result["state"], "completed")
+            self.assertIn("README.md", names)
+            self.assertIn(f"{FIXTURE_THREAD_ID}/thread.json", names)
+            self.assertIn(f"{FIXTURE_THREAD_ID}/convert.json", names)
+            self.assertNotIn(f"{ARCHIVED_THREAD_ID}/thread.json", names)
+            self.assertNotIn(f"{ARCHIVED_THREAD_ID}/convert.json", names)
+            self.assertNotIn("status.json", names)
 
             multi_stdout, _stderr, multi_exit_code = self._invoke_cli(
                 outputs_root,
-                "run",
+                "items", "refresh",
                 "--primary-root",
                 str(FIXTURE_CODEX_HOME),
                 "--backup-root",
                 str(ARCHIVED_FIXTURE_ROOT),
                 "--include-archived-sources",
-                "--thread-id",
+                "--item-id",
                 FIXTURE_THREAD_ID,
-                "--thread-id",
+                "--item-id",
                 ARCHIVED_THREAD_ID,
-                "--format",
-                "json",
+                "--json",
             )
             self.assertEqual(multi_exit_code, 0)
             multi_payload = json.loads(multi_stdout)
             with ZipFile(multi_payload["archive_path"]) as archive:
                 names = set(archive.namelist())
-                zipped_status = json.loads(archive.read("status.json").decode("utf-8"))
-                zipped_result = json.loads(archive.read("result.json").decode("utf-8"))
-            self.assertIn(f"threads/{FIXTURE_THREAD_ID}.md", names)
-            self.assertIn(f"threads/{ARCHIVED_THREAD_ID}.md", names)
-            self.assertIn("environment/ledger.json", names)
-            self.assertEqual(zipped_status["state"], "completed")
-            self.assertEqual(zipped_result["state"], "completed")
+            self.assertIn("README.md", names)
+            self.assertIn(f"{FIXTURE_THREAD_ID}/thread.json", names)
+            self.assertIn(f"{FIXTURE_THREAD_ID}/convert.json", names)
+            self.assertIn(f"{ARCHIVED_THREAD_ID}/thread.json", names)
+            self.assertIn(f"{ARCHIVED_THREAD_ID}/convert.json", names)
+            self.assertNotIn("status.json", names)
 
             list_stdout, _stderr, list_exit_code = self._invoke_cli(
                 outputs_root,
-                "list-jobs",
-                "--format",
-                "json",
+                "runs", "list",
+                "--json",
             )
             self.assertEqual(list_exit_code, 0)
             listed_jobs = json.loads(list_stdout)
@@ -378,10 +357,10 @@ class WorkerCliTests(unittest.TestCase):
 
             show_stdout, _stderr, show_exit_code = self._invoke_cli(
                 outputs_root,
-                "show-job",
-                multi_payload["job_id"],
-                "--format",
-                "json",
+                "runs", "show",
+                "--run-id",
+                multi_payload["run_id"],
+                "--json",
             )
             self.assertEqual(show_exit_code, 0)
             show_payload = json.loads(show_stdout)

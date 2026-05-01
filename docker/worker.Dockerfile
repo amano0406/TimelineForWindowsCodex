@@ -14,4 +14,4 @@ COPY configs/ /app/config/
 ENV PYTHONPATH=/app/worker/src
 ENV TIMELINE_FOR_WINDOWS_CODEX_RUNTIME=docker
 ENTRYPOINT ["python", "-m", "timeline_for_windows_codex_worker"]
-CMD ["daemon", "--poll-interval", "5"]
+CMD ["items", "refresh"]

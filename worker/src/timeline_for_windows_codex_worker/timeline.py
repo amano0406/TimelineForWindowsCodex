@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
-from html import escape
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from .contracts import ThreadSelection
 
 RUN_INCLUDED_ITEMS = [
-    "Per-thread raw user/assistant message chain",
+    "Per-thread thread.json files with raw-like user/assistant/system message chains",
+    "Per-thread convert.json files with stable source and conversion metadata",
+    "Optional compaction replacement_history recovery when explicitly enabled",
     "Observed thread names from supported sources",
-    "Cross-thread environment ledger",
-    "ZIP bundle with readme, index, threads, and environment artifacts",
+    "Cross-thread environment observations in run diagnostics",
+    "ZIP bundle with README.md and <thread_id>/convert.json plus <thread_id>/thread.json files",
 ]
 
 RUN_LIMITATION_ITEMS = [
     "Confirmed thread rename events are not reconstructed; thread names are observation points.",
     "Exact custom-instruction save timestamps are not reconstructed; only observation times are recorded.",
+    "Compaction-recovered messages use the compaction observation time when the original send time is unavailable.",
     "Fine-grained file edit diffs are not exported.",
     "Binary attachment contents are not exported; only attachment labels or file names are preserved when visible.",
     "Archived thread_reads coverage is limited to currently supported item types.",
@@ -46,266 +46,127 @@ def build_segments(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return segments
 
 
-def render_thread_timeline(
+THREAD_CONVERT_FILE_NAME = "convert.json"
+THREAD_FINAL_FILE_NAME = "thread.json"
+
+
+def export_thread_dir_name(thread_id: str) -> str:
+    return _safe_thread_id_filename(thread_id)
+
+
+def build_thread_conversation_payload(
+    *,
     thread: ThreadSelection,
     transcript_rows: list[dict[str, Any]],
+    limitations: list[str],
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "generated_by": "TimelineForWindowsCodex",
+        "thread": {
+            "thread_id": thread.thread_id,
+            "preferred_title": thread.preferred_title,
+            "observed_thread_names": [
+                item for item in _dedupe_thread_name_observations(thread.observed_thread_names)
+            ],
+            "source_root_path": thread.source_root_path,
+            "source_root_kind": thread.source_root_kind,
+            "session_path": thread.session_path,
+            "updated_at": thread.updated_at,
+            "cwd": thread.cwd,
+            "first_user_message_excerpt": thread.first_user_message_excerpt,
+        },
+        "messages": _thread_messages(thread, transcript_rows),
+        "known_gaps": limitations,
+    }
+
+
+def build_thread_convert_payload(
+    *,
+    thread: ThreadSelection,
+    events: list[dict[str, Any]],
+    transcript_rows: list[dict[str, Any]],
+    segments: list[dict[str, Any]],
+    environment_observations: list[dict[str, Any]],
+    source_fingerprint: dict[str, object] | None,
+    source_type: str,
+    limitations: list[str],
+    cache_key: str,
+    parser_version: int,
+    render_contract_version: int,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "generated_by": "TimelineForWindowsCodex",
+        "thread_id": thread.thread_id,
+        "source": {
+            "type": source_type,
+            "fingerprint": _stable_source_fingerprint(source_fingerprint),
+        },
+        "conversion": {
+            "parser_version": parser_version,
+            "render_contract_version": render_contract_version,
+            "cache_key": cache_key,
+            "redaction_note": "Content is redacted according to the active redaction profile before export.",
+        },
+        "counts": {
+            "message_count": len(transcript_rows),
+            "event_count": len(events),
+            "segment_count": len(segments),
+            "environment_observation_count": len(environment_observations),
+        },
+        "known_gaps": limitations,
+    }
+
+
+def render_export_readme_md(
+    job_id: str,
+    *,
+    generated_at: str,
+    thread_rows: list[dict[str, Any]],
 ) -> str:
-    observed_thread_names = _dedupe_thread_name_observations(thread.observed_thread_names)
-    display_name = str(thread.preferred_title or "").strip()
-    lines = [
-        f"# {thread.thread_id}",
-        "",
-        f"- Thread ID / スレッドID: `{thread.thread_id}`",
-        f"- Source / ソース: `{thread.source_root_kind}`",
-        f"- Session / セッション: `{thread.session_path}`",
-        f"- Updated At / 更新時刻: `{thread.updated_at or ''}`",
-        f"- CWD: `{thread.cwd or ''}`",
-        f"- Messages / 発話数: `{len(transcript_rows)}`",
-        "- Environment ledger / 環境台帳: `../environment/ledger.md`",
-        "",
-    ]
-
-    if display_name and display_name != thread.thread_id:
-        lines.extend(
-            [
-                f"- Current observed thread name / 現在の観測スレッド名: `{display_name}`",
-                "",
-            ]
-        )
-
-    if thread.first_user_message_excerpt:
-        lines.extend(["## First prompt / 最初のプロンプト", "", thread.first_user_message_excerpt, ""])
-
-    if observed_thread_names:
-        lines.extend(
-            [
-                "## Thread-local system notes / スレッド内システムメモ",
-                "",
-                "Observed thread names from the selected sources / 選択したソースで観測したスレッド名:",
-                "",
-            ]
-        )
-        for observation in observed_thread_names:
-            name = str(observation.get("name") or "")
-            observed_at = _format_display_timestamp(observation.get("observed_at"))
-            source = str(observation.get("source") or "").strip() or "unknown"
-            suffix = " (current)" if name == display_name else ""
-            lines.append(f"- `{observed_at}` | `{source}` | {name}{suffix}")
-        lines.append("")
-        if len(observed_thread_names) > 1:
-            lines.extend(
-                [
-                    "These are observation points, not confirmed rename events. "
-                    "これらは観測時点であり、確定した名称変更イベントではありません。",
-                    "",
-                ]
-            )
-
-    if not transcript_rows:
-        lines.extend(
-            [
-                "## Transcript / 会話",
-                "",
-                "No transcript messages were available for the selected filters. "
-                "選択した条件では会話が見つかりませんでした。",
-                "",
-            ]
-        )
-        return "\n".join(lines).strip() + "\n"
-
-    lines.extend(["## Transcript / 会話", ""])
-    for event in transcript_rows:
-        lines.append(f"### {_format_display_timestamp(event.get('timestamp'))} | {_display_actor(event.get('actor'))}")
-        lines.append("")
-        if str(event.get("actor") or "") == "user":
-            mode = str(event.get("mode") or "").strip()
-            if mode:
-                lines.append(f"- Mode / モード: `{mode}`")
-
-        attachments = event.get("attachments") or []
-        if isinstance(attachments, list) and attachments:
-            lines.append("- Attachments / 添付ファイル:")
-            for attachment in attachments:
-                lines.append(f"  - {attachment}")
-            lines.append("")
-
-        text = str(event.get("raw_text") or event.get("text") or "")
-        if text.strip():
-            lines.append(text.rstrip())
-        else:
-            lines.append("_(no text)_")
-        lines.append("")
-
-    return "\n".join(lines).strip() + "\n"
-
-
-def render_timeline_index(job_id: str, thread_rows: list[dict[str, Any]]) -> str:
     thread_count = len(thread_rows)
     message_total = sum(int(row.get("message_count") or 0) for row in thread_rows)
     lines = [
-        f"# {job_id}",
+        "# TimelineForWindowsCodex export",
         "",
-        "Timeline bundle index. Start with `../readme.html` if you want the simplest entry point.",
-        "このファイルはスレッド一覧です。最初は `../readme.html` を開くと分かりやすいです。",
+        "This package was generated by `TimelineForWindowsCodex`.",
+        "`TimelineForWindowsCodex` は Windows Codex のローカル thread 情報を管理し、thread 単位の JSON として取り出すためのローカルツールです。",
         "",
-        f"- Threads / スレッド数: `{thread_count}`",
-        f"- Messages / 発話数: `{message_total}`",
+        "## Summary",
         "",
-        "## Bundle files / 同梱ファイル",
+        f"- Run ID: `{job_id}`",
+        f"- Generated at: `{generated_at}`",
+        f"- Thread count: `{thread_count}`",
+        f"- Message count: `{message_total}`",
         "",
-        "- `threads/index.md`",
-        "- `readme.html`",
-        "- `fidelity_report.md`",
-        "- `fidelity_report.json`",
-        "- `environment/ledger.md`",
-        "- `environment/ledger.json`",
-        "- `environment/observations.jsonl`",
+        "## Layout",
         "",
-        "## Thread transcripts / スレッド本文",
+        "- `README.md`: this file",
+        "- `<thread_id>/convert.json`: stable conversion metadata for one Codex thread",
+        "- `<thread_id>/thread.json`: final user/assistant/system conversation JSON for one Codex thread",
+        "",
+        "## Notes",
+        "",
+        "- Codex local history is the source of truth.",
+        "- The download ZIP is a handoff package, not the primary database.",
+        "- Thread conversation files are JSON so downstream timeline or LLM tools can decide how to filter, render, or summarize them.",
+        "- Binary attachment bodies are not included; visible labels or file names are preserved when available.",
+        "",
+        "## Items",
         "",
     ]
-    for row in thread_rows:
-        export_path = f"threads/{row['export_markdown_name']}"
-        observed_name = str(row.get("preferred_title") or "").strip()
-        observed_suffix = f" | observed name: {observed_name}" if observed_name and observed_name != row["thread_id"] else ""
+    for row in sorted(thread_rows, key=lambda item: str(item.get("thread_id") or "")):
+        thread_id = str(row.get("thread_id") or "")
+        item_dir = str(row.get("export_thread_dir") or export_thread_dir_name(thread_id))
+        preferred_title = str(row.get("preferred_title") or "")
+        title_part = f" | {preferred_title}" if preferred_title and preferred_title != thread_id else ""
         lines.append(
-            f"- `{row['thread_id']}` -> `{export_path}`{observed_suffix} "
-            f"({row['message_count']} messages / 発話)"
+            f"- `{thread_id}` -> `{item_dir}/{THREAD_FINAL_FILE_NAME}` and `{item_dir}/{THREAD_CONVERT_FILE_NAME}`{title_part} "
+            f"({int(row.get('message_count') or 0)} messages)"
         )
     lines.append("")
     return "\n".join(lines)
-
-
-def export_timeline_name(preferred_title: str, thread_id: str) -> str:
-    return f"{_safe_thread_id_filename(thread_id)}.md"
-
-
-def export_thread_markdown_name(preferred_title: str, thread_id: str) -> str:
-    return f"{_safe_thread_id_filename(thread_id)}.md"
-
-
-def render_export_readme_html(job_id: str, thread_rows: list[dict[str, Any]]) -> str:
-    thread_count = len(thread_rows)
-    message_total = sum(int(row.get("message_count") or 0) for row in thread_rows)
-    overview_items = [
-        "\n".join(
-            [
-                "<li>",
-                '  <a href="threads/index.md">threads/index.md</a>',
-                "  <div class=\"meta\">Bundle index for the exported thread histories. "
-                "スレッド一覧と対応ファイルを確認できます。</div>",
-                "</li>",
-            ]
-        ),
-        "\n".join(
-            [
-                "<li>",
-                '  <a href="environment/ledger.md">environment/ledger.md</a>',
-                "  <div class=\"meta\">Cross-thread environment ledger derived from selected sessions. "
-                "スレッド横断の環境変更台帳です。</div>",
-                "</li>",
-            ]
-        ),
-        "\n".join(
-            [
-                "<li>",
-                '  <a href="fidelity_report.md">fidelity_report.md</a>',
-                "  <div class=\"meta\">Run-level source coverage and known fidelity gaps. "
-                "どの source を採用し、何が未収録かを確認できます。</div>",
-                "</li>",
-            ]
-        ),
-    ]
-
-    items = []
-    for row in thread_rows:
-        href = f"threads/{escape(str(row['export_markdown_name']))}"
-        observed_name = escape(str(row.get("preferred_title") or ""))
-        updated_at = escape(str(row.get("updated_at") or ""))
-        message_count = escape(str(row.get("message_count") or 0))
-        thread_id = escape(str(row["thread_id"]))
-        observed_name_meta = (
-            f"  <div class=\"meta\">Observed thread name: {observed_name}</div>"
-            if observed_name and observed_name != thread_id
-            else ""
-        )
-        items.append(
-            "\n".join(
-                [
-                    "<li>",
-                    f'  <a href="{href}">{thread_id}</a>',
-                    f"  <div class=\"meta\">File: {escape(str(row['export_markdown_name']))}</div>",
-                    f"  <div class=\"meta\">Thread ID: {thread_id}</div>",
-                    observed_name_meta,
-                    f"  <div class=\"meta\">Messages: {message_count}</div>",
-                    f"  <div class=\"meta\">Updated At: {updated_at}</div>",
-                    "</li>",
-                ]
-            )
-        )
-
-    return "\n".join(
-        [
-            "<!doctype html>",
-            '<html lang="ja">',
-            "<head>",
-            '  <meta charset="utf-8">',
-            f"  <title>{escape(job_id)} - TimelineForWindowsCodex export</title>",
-            "  <style>",
-            "    body { font-family: 'Segoe UI', sans-serif; margin: 2rem auto; max-width: 960px; line-height: 1.6; color: #0f172a; }",
-            "    h1 { margin-bottom: 0.25rem; }",
-            "    p { color: #475569; }",
-            "    .summary { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin: 1.25rem 0 2rem; }",
-            "    .summary-card { border: 1px solid #cbd5e1; border-radius: 16px; padding: 1rem 1.25rem; background: #f8fafc; }",
-            "    .summary-label { color: #475569; font-size: 0.9rem; }",
-            "    .summary-value { font-size: 1.35rem; font-weight: 700; margin-top: 0.2rem; }",
-            "    ul { list-style: none; padding: 0; display: grid; gap: 1rem; }",
-            "    li { border: 1px solid #cbd5e1; border-radius: 16px; padding: 1rem 1.25rem; background: #fff; }",
-            "    a { font-weight: 700; color: #0f172a; text-decoration: none; }",
-            "    a:hover { text-decoration: underline; }",
-            "    .meta { color: #475569; font-size: 0.95rem; }",
-            "  </style>",
-            "</head>",
-            "<body>",
-            f"  <h1>{escape(job_id)}</h1>",
-            "  <p>Thread transcript archive. Open a thread below to read the raw user and assistant message chain.</p>",
-            "  <p>Codex の raw な会話連鎖を thread ごとに保存したアーカイブです。"
-            "スレッド内の細かなファイル編集履歴は含めず、見えた会話本文を優先しています。</p>",
-            "  <section class=\"summary\">",
-            "    <div class=\"summary-card\"><div class=\"summary-label\">Threads / スレッド数</div>"
-            f"<div class=\"summary-value\">{thread_count}</div></div>",
-            "    <div class=\"summary-card\"><div class=\"summary-label\">Messages / 発話数</div>"
-            f"<div class=\"summary-value\">{message_total}</div></div>",
-            "    <div class=\"summary-card\"><div class=\"summary-label\">Recommended order / 開く順番</div>"
-            "<div class=\"summary-value\">readme → index → thread</div></div>",
-            "  </section>",
-            "  <h2>Bundle files / 同梱ファイル</h2>",
-            "  <ul>",
-            *overview_items,
-            "  </ul>",
-            "  <h2>Included / 含まれるもの</h2>",
-            "  <ul>",
-            *[
-                f"    <li><div>{escape(item)}</div></li>"
-                for item in RUN_INCLUDED_ITEMS
-            ],
-            "  </ul>",
-            "  <h2>Known gaps / 既知の欠損・未収録</h2>",
-            "  <ul>",
-            *[
-                f"    <li><div>{escape(item)}</div></li>"
-                for item in RUN_LIMITATION_ITEMS
-            ],
-            "  </ul>",
-            "  <h2>Threads / スレッド本文</h2>",
-            "  <ul>",
-            *items,
-            "  </ul>",
-            "</body>",
-            "</html>",
-            "",
-        ]
-    )
 
 
 def build_environment_ledger(observations: list[dict[str, Any]]) -> dict[str, Any]:
@@ -507,41 +368,71 @@ def _segment_label(bucket: str, events: list[dict[str, Any]]) -> str:
     return "System block"
 
 
-def _render_event_line(event: dict[str, Any]) -> str:
-    timestamp = str(event.get("timestamp") or "")
-    short_time = timestamp[11:19] if len(timestamp) >= 19 else timestamp
-    actor = str(event.get("actor") or "system")
-    kind = str(event.get("kind") or "event")
-    text = str(event.get("text") or "").strip()
-    tool_name = str(event.get("tool_name") or "")
-
-    if kind == "tool_call" and tool_name:
-        return f"- {short_time} `{tool_name}` call: {text}"
-    if kind == "tool_output":
-        return f"- {short_time} tool output: {text}"
-    if kind == "reasoning":
-        return f"- {short_time} reasoning: {text}"
-    return f"- {short_time} {actor}/{kind}: {text}"
-
-
-def _display_actor(value: Any) -> str:
-    actor = str(value or "").strip().lower()
-    if actor == "user":
-        return "User"
-    if actor == "assistant":
-        return "Assistant"
-    return actor.title() or "System"
+def _normalize_message_for_item(row: dict[str, Any]) -> dict[str, Any]:
+    actor = str(row.get("actor") or "").strip().lower()
+    payload: dict[str, Any] = {
+        "role": actor or "unknown",
+        "created_at": row.get("timestamp"),
+        "sequence": row.get("sequence"),
+        "phase": row.get("phase"),
+        "mode": row.get("mode"),
+        "text": str(row.get("raw_text") or row.get("text") or ""),
+        "attachments": row.get("attachments") if isinstance(row.get("attachments"), list) else [],
+    }
+    source = str(row.get("source") or "").strip()
+    if source:
+        payload["source"] = source
+    return payload
 
 
-def _format_display_timestamp(value: Any) -> str:
-    timestamp = str(value or "").strip()
-    if not timestamp:
-        return "-"
-    try:
-        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        return dt.astimezone(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S JST")
-    except (ValueError, TypeError):
-        return timestamp
+def _thread_messages(thread: ThreadSelection, transcript_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    messages = _thread_system_messages(thread)
+    messages.extend(_normalize_message_for_item(row) for row in transcript_rows)
+    messages.sort(key=_message_sort_key)
+    return messages
+
+
+def _thread_system_messages(thread: ThreadSelection) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index, observation in enumerate(_dedupe_thread_name_observations(thread.observed_thread_names), start=1):
+        name = str(observation.get("name") or "").strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "role": "system",
+                "created_at": observation.get("observed_at") or thread.updated_at,
+                "sequence": -10_000 + index,
+                "phase": "thread_metadata",
+                "mode": None,
+                "kind": "observed_thread_name",
+                "text": f"Observed thread name: {name}",
+                "attachments": [],
+                "source": observation.get("source") or "",
+                "observed_thread_name": name,
+            }
+        )
+    return rows
+
+
+def _message_sort_key(message: dict[str, Any]) -> tuple[str, int, str]:
+    sequence = message.get("sequence")
+    sequence_value = sequence if isinstance(sequence, int) else 0
+    return (
+        str(message.get("created_at") or ""),
+        sequence_value,
+        str(message.get("role") or ""),
+    )
+
+
+def _stable_source_fingerprint(source_fingerprint: dict[str, object] | None) -> dict[str, object] | None:
+    if source_fingerprint is None:
+        return None
+    return {
+        "path": source_fingerprint.get("path"),
+        "size_bytes": source_fingerprint.get("size_bytes"),
+        "sha256": source_fingerprint.get("sha256"),
+    }
 
 
 def _safe_thread_id_filename(thread_id: str) -> str:

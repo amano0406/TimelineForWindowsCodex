@@ -22,15 +22,7 @@ CONTAINER_APPDATA_DIR = PurePosixPath("/smoke/appdata")
 CONTAINER_OUTPUT_DIR = PurePosixPath("/smoke/output")
 CONTAINER_IGNORED_OUTPUTS_DIR = PurePosixPath("/smoke/ignored")
 REQUIRED_ZIP_ENTRIES = {
-    "readme.html",
-    "threads/index.md",
-    "environment/ledger.md",
-    "fidelity_report.md",
-    "catalog.json",
-    "processing_profile.json",
-    "update_manifest.json",
-    "status.json",
-    "result.json",
+    "README.md",
 }
 
 
@@ -77,7 +69,8 @@ def main(argv: list[str] | None = None) -> int:
             _run_compose_json(
                 [
                     "settings",
-                    "add-source",
+                    "inputs",
+                    "add",
                     str(source_mount.container_path),
                     "--format",
                     "json",
@@ -92,7 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         _run_compose_json(
             [
                 "settings",
-                "set-output",
+                "master",
+                "set",
                 str(CONTAINER_OUTPUT_DIR),
                 "--format",
                 "json",
@@ -108,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         inspections: list[dict[str, Any]] = []
         for _ in range(runs):
             refresh_payload = _run_compose_json(
-                ["refresh", "--format", "json"],
+                ["items", "refresh", "--json"],
                 settings_dir=settings_dir,
                 appdata_dir=appdata_dir,
                 output_dir=output_dir,
@@ -224,18 +218,15 @@ def _inspect_refresh(payload: dict[str, Any], output_dir: Path) -> dict[str, Any
 
     with ZipFile(archive_path) as archive:
         names = set(archive.namelist())
-        thread_markdown_count = len(
+        thread_json_count = len(
             [
                 name
                 for name in names
-                if name.startswith("threads/")
-                and name.endswith(".md")
-                and name != "threads/index.md"
+                if name.endswith("/thread.json")
             ]
         )
+        convert_json_count = len([name for name in names if name.endswith("/convert.json")])
         missing_zip_entries = sorted(REQUIRED_ZIP_ENTRIES - names)
-        zipped_status = json.loads(archive.read("status.json").decode("utf-8"))
-        zipped_result = json.loads(archive.read("result.json").decode("utf-8"))
 
     return {
         "refresh_id": payload.get("refresh_id"),
@@ -244,13 +235,11 @@ def _inspect_refresh(payload: dict[str, Any], output_dir: Path) -> dict[str, Any
         "archive_name": archive_path.name,
         "status_state": status.get("state"),
         "result_state": result.get("state"),
-        "zip_status_state": zipped_status.get("state"),
-        "zip_result_state": zipped_result.get("state"),
         "thread_count": payload.get("thread_count"),
         "event_count": payload.get("event_count"),
         "update_counts": update_manifest.get("counts"),
         "current_processing_mode": current.get("processing_mode"),
-        "current_job_id": current.get("job_id"),
+        "current_run_id": current.get("job_id"),
         "current_reused_thread_count": current.get("reused_thread_count"),
         "current_rendered_thread_count": current.get("rendered_thread_count"),
         "fidelity_thread_count": fidelity.get("thread_count"),
@@ -258,7 +247,8 @@ def _inspect_refresh(payload: dict[str, Any], output_dir: Path) -> dict[str, Any
         "processing_profile_thread_count": processing_profile.get("thread_count"),
         "slowest_thread_count": len(processing_profile.get("slowest_threads") or []),
         "missing_zip_entries": missing_zip_entries,
-        "zip_thread_markdown_count": thread_markdown_count,
+        "zip_thread_json_count": thread_json_count,
+        "zip_convert_json_count": convert_json_count,
     }
 
 
@@ -276,18 +266,20 @@ def _assert_valid(
     for payload, inspection in zip(refresh_payloads, inspections, strict=True):
         if payload.get("state") != "completed":
             raise AssertionError(f"Refresh did not complete: {payload}")
-        for key in ("status_state", "result_state", "zip_status_state", "zip_result_state"):
+        for key in ("status_state", "result_state"):
             if inspection.get(key) != "completed":
                 raise AssertionError(f"{key} was not completed: {inspection}")
         if inspection.get("missing_zip_entries"):
             raise AssertionError(f"ZIP is missing required files: {inspection}")
         if int(inspection.get("thread_count") or 0) <= 0:
             raise AssertionError(f"No threads were exported: {inspection}")
-        if inspection.get("zip_thread_markdown_count") != inspection.get("thread_count"):
-            raise AssertionError(f"Thread markdown count mismatch: {inspection}")
+        if inspection.get("zip_thread_json_count") != inspection.get("thread_count"):
+            raise AssertionError(f"Thread JSON count mismatch: {inspection}")
+        if inspection.get("zip_convert_json_count") != inspection.get("thread_count"):
+            raise AssertionError(f"Convert JSON count mismatch: {inspection}")
         if inspection.get("processing_profile_thread_count") != inspection.get("thread_count"):
             raise AssertionError(f"Processing profile thread count mismatch: {inspection}")
-        if inspection.get("current_job_id") != payload.get("refresh_id"):
+        if inspection.get("current_run_id") != payload.get("run_id"):
             raise AssertionError(f"Current pointer does not match refresh: {inspection}")
 
     if len(inspections) >= 2:
