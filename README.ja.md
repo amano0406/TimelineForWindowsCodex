@@ -6,6 +6,34 @@ English README: [README.md](README.md)
 
 この製品の役割は、固定された master 出力先を最新化し、必要なときだけ ZIP として取り出せる状態にすることです。読みやすい全体タイムライン化や要約は後段の Timeline 製品や LLM に任せます。
 
+## この README の役割
+
+この README は、通常利用する人が「何をする製品か」「どう起動するか」「何が出力されるか」「どう確認するか」を最短で把握するための運用ガイドです。
+
+設計判断、残タスク、方針メモは別文書に分けます。
+
+- 進捗と残タスク: [TODO.md](TODO.md)
+- settings 管理方針: [SETTINGS_POLICY.md](SETTINGS_POLICY.md)
+- Docker 優先方針: [DOCKER_ONLY_POLICY.md](DOCKER_ONLY_POLICY.md)
+
+## クイックスタート
+
+通常は repo root で以下を実行します。
+
+```powershell
+cd /d C:\apps\TimelineForWindowsCodex
+.\start.bat
+.\cli.bat settings status
+.\cli.bat items refresh --json
+.\cli.bat items download --to C:\TimelineData\windows-codex-downloads --json
+```
+
+動作確認をまとめて行う場合:
+
+```powershell
+.\test-operational.bat
+```
+
 ## できること
 
 - Docker Compose で固定 mount された Codex 履歴ディレクトリを読みます。

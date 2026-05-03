@@ -6,6 +6,34 @@ Japanese README: [README.ja.md](README.ja.md)
 
 This product is CLI-only. There is no Web UI. The main job is to keep a fixed master artifact directory up to date, then create a small ZIP package when the user wants to hand the data to another LLM or downstream Timeline product.
 
+## README Role
+
+This README is the operational front door for users. It should quickly answer what the product does, how to start it, what it outputs, and how to verify it.
+
+Design decisions, progress tracking, and policy notes live in separate documents:
+
+- Progress and remaining work: [TODO.md](TODO.md)
+- Settings policy: [SETTINGS_POLICY.md](SETTINGS_POLICY.md)
+- Docker-first policy: [DOCKER_ONLY_POLICY.md](DOCKER_ONLY_POLICY.md)
+
+## Quick Start
+
+Run these commands from the repository root:
+
+```powershell
+cd /d C:\apps\TimelineForWindowsCodex
+.\start.bat
+.\cli.bat settings status
+.\cli.bat items refresh --json
+.\cli.bat items download --to C:\TimelineData\windows-codex-downloads --json
+```
+
+Run the operational check suite:
+
+```powershell
+.\test-operational.bat
+```
+
 ## What It Does
 
 - Reads the fixed local Codex history roots mounted by Docker Compose.
