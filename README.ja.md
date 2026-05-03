@@ -187,3 +187,11 @@ python tests/smoke/run_cli_ps1_download.py
 ```
 
 このテストは一時 settings path に fixture 用の `settings.json` を作成し、専用 Docker Compose project で `cli.ps1 items refresh` と `cli.ps1 items download` を実行して ZIP 構成を検証します。本番用の `settings.json` と通常の worker service container は変更しません。
+
+Windows launcher operational smoke test:
+
+```powershell
+python tests/smoke/run_windows_launcher_flow.py
+```
+
+このテストは `start.bat`、`cli.bat settings status`、`cli.bat items refresh`、`cli.bat items download`、`stop.bat` を順番に実行します。一時 settings path、fixture source、一時 Docker Compose project を使うため、本番用の `settings.json`、通常の worker service container、通常の master 出力先は変更しません。

@@ -188,3 +188,11 @@ python tests/smoke/run_cli_ps1_download.py
 ```
 
 This test writes a fixture-only `settings.json` to a temporary settings path, runs `cli.ps1 items refresh`, runs `cli.ps1 items download` in a dedicated Docker Compose project, and verifies the ZIP layout. It does not modify the normal local `settings.json` or the normal worker service container.
+
+Windows launcher operational smoke test:
+
+```powershell
+python tests/smoke/run_windows_launcher_flow.py
+```
+
+This test runs `start.bat`, `cli.bat settings status`, `cli.bat items refresh`, `cli.bat items download`, and `stop.bat` in sequence. It uses a temporary settings path, fixture sources, and a dedicated Docker Compose project, so it does not modify the normal local `settings.json`, the normal worker service container, or the normal master output root.

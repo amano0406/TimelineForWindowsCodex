@@ -80,6 +80,7 @@
 - [x] 本物または fixture の `.codex` を一時出力先で読む production-like smoke test がある
 - [x] Docker Compose 経由の production-like smoke test がある
 - [x] ローカル `cli.ps1` 経由の download smoke test がある
+- [x] Windows 正面玄関の `start.bat` / `cli.bat` / `stop.bat` を通す launcher smoke test がある
 - [x] ZIP に `README.md` と `items/<thread_id>/convert_info.json` / `items/<thread_id>/timeline.json` が入ることを確認している
 
 ## H. 低優先または範囲外
