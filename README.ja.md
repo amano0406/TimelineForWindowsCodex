@@ -195,3 +195,11 @@ python tests/smoke/run_windows_launcher_flow.py
 ```
 
 このテストは `start.bat`、`cli.bat settings status`、`cli.bat items refresh`、`cli.bat items download`、`stop.bat` を順番に実行します。一時 settings path、fixture source、一時 Docker Compose project を使うため、本番用の `settings.json`、通常の worker service container、通常の master 出力先は変更しません。
+
+通常の安定性確認をまとめて実行する場合:
+
+```powershell
+.\test-operational.bat
+```
+
+これは `cli.ps1` download smoke test、Windows launcher operational smoke test、Docker production-like smoke test を順番に実行します。テスト用の一時 settings / source / output を使うため、通常運用の master 出力先は変更しません。

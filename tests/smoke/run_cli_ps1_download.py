@@ -376,9 +376,10 @@ def _assert_fixture_download_payload(payload: dict[str, Any], archive_path: Path
         raise AssertionError(f"Download did not complete: {payload!r}")
     if int(payload.get("thread_count") or 0) != 2:
         raise AssertionError(f"Download should contain exactly 2 fixture threads: {payload!r}")
-    if Path(str(payload.get("destination_path") or "")) != archive_path:
+    payload_destination = str(payload.get("destination_path") or "")
+    if not _same_windows_or_wsl_path(payload_destination, archive_path):
         raise AssertionError(
-            f"Download payload destination does not match ZIP path: {payload.get('destination_path')} != {archive_path}"
+            f"Download payload destination does not match ZIP path: {payload_destination} != {archive_path}"
         )
 
 
@@ -420,6 +421,21 @@ def _to_windows_path(path: Path) -> str:
         rest = text[7:].replace("/", "\\")
         return f"{drive}:\\{rest}"
     return text
+
+
+def _same_windows_or_wsl_path(left: str | Path, right: str | Path) -> bool:
+    return _path_key(left) == _path_key(right)
+
+
+def _path_key(value: str | Path) -> str:
+    text = str(value).replace("\\", "/")
+    if text.startswith("/mnt/") and len(text) >= 7 and text[6] == "/":
+        drive = text[5].upper()
+        rest = text[7:]
+        return f"{drive}:/{rest}".casefold()
+    if len(text) >= 3 and text[1] == ":" and text[2] == "/":
+        return f"{text[0].upper()}:{text[2:]}".casefold()
+    return text.casefold()
 
 
 if __name__ == "__main__":
