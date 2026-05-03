@@ -146,6 +146,16 @@ function Invoke-TfwcHiddenProcess {
     $startInfo.RedirectStandardError = $true
     $startInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
     $startInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+    $fileDirectory = Split-Path -Parent $FilePath
+    if ($fileDirectory) {
+        $currentPath = $startInfo.EnvironmentVariables["PATH"]
+        if (-not $currentPath) {
+            $currentPath = $env:PATH
+        }
+        $updatedPath = "$fileDirectory;$currentPath"
+        $startInfo.EnvironmentVariables["PATH"] = $updatedPath
+        $startInfo.EnvironmentVariables["Path"] = $updatedPath
+    }
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
