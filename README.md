@@ -177,3 +177,11 @@ python tests/smoke/run_docker_compose_refresh.py
 ```
 
 The smoke test runs refresh twice, verifies the fixed master contract, verifies the download ZIP contract, and checks that unchanged threads are skipped on the second refresh.
+
+Local `cli.ps1` download smoke test:
+
+```powershell
+python tests/smoke/run_cli_ps1_download.py
+```
+
+This test temporarily writes a fixture-only `settings.json`, runs `cli.ps1 items refresh`, runs `cli.ps1 items download`, verifies the ZIP layout, then restores the original local settings file.

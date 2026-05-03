@@ -176,3 +176,11 @@ python tests/smoke/run_docker_compose_refresh.py
 ```
 
 この smoke test は refresh を 2 回実行し、master 契約、download ZIP 契約、2 回目の unchanged skip を確認します。
+
+ローカル `cli.ps1` download smoke test:
+
+```powershell
+python tests/smoke/run_cli_ps1_download.py
+```
+
+このテストは fixture 用の `settings.json` を一時的に書き、`cli.ps1 items refresh` と `cli.ps1 items download` を実行し、ZIP 構成を検証してから元のローカル設定を復元します。

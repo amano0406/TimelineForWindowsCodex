@@ -73,18 +73,85 @@ function Get-TfwcLastExitCode {
     return 1
 }
 
+function Format-TfwcProcessArgument {
+    param([string]$Value)
+
+    if ($null -eq $Value) { return '""' }
+    $text = [string]$Value
+    if ($text.Length -eq 0) { return '""' }
+    if ($text -notmatch '[\s"]') { return $text }
+
+    $builder = [System.Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $text.ToCharArray()) {
+        if ($character -eq '\') { $backslashes += 1; continue }
+        if ($character -eq '"') {
+            if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))); $backslashes = 0 }
+            [void]$builder.Append('\"')
+            continue
+        }
+        if ($backslashes -gt 0) { [void]$builder.Append(('\' * $backslashes)); $backslashes = 0 }
+        [void]$builder.Append($character)
+    }
+    if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Invoke-TfwcHiddenProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @(),
+        [switch]$WriteOutput,
+        [switch]$SuppressOutput
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.Arguments = (@($Arguments) | ForEach-Object { Format-TfwcProcessArgument -Value ([string]$_) }) -join " "
+    $startInfo.WorkingDirectory = $repoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    [void]$process.Start()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+
+    $stdout = [string]$stdoutTask.Result
+    $stderr = [string]$stderrTask.Result
+    if ($WriteOutput -and -not $SuppressOutput) {
+        if ($stdout.Length -gt 0) { [Console]::Out.Write($stdout) }
+        if ($stderr.Length -gt 0) { [Console]::Error.Write($stderr) }
+    }
+
+    return [pscustomobject]@{
+        ExitCode = [int]$process.ExitCode
+        Stdout = $stdout
+        Stderr = $stderr
+    }
+}
+
 Initialize-TfwcSettingsFile
 Initialize-TfwcDockerMountEnvironment
 $docker = Get-TfwcDockerCommand
-& $docker info *> $null
-if (-not $?) {
+$dockerInfo = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments @("info") -SuppressOutput
+if ($dockerInfo.ExitCode -ne 0) {
     throw "Docker Desktop is installed but the Docker engine is not ready."
 }
 
 Write-Host "Starting TimelineForWindowsCodex worker..."
 $global:LASTEXITCODE = 0
-& $docker compose up -d --build worker
-if ((Get-TfwcLastExitCode) -ne 0) { throw "docker compose failed." }
+$startResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments @("compose", "up", "-d", "--build", "worker") -WriteOutput
+if ($startResult.ExitCode -ne 0) { throw "docker compose failed." }
 
 Write-Host ""
 Write-Host "TimelineForWindowsCodex worker-1 was started."
@@ -95,4 +162,4 @@ Write-Host "  .\cli.bat settings status"
 Write-Host "  .\cli.bat items list --json"
 Write-Host "  .\cli.bat items refresh --json"
 Write-Host "  .\cli.bat items download --to C:\TimelineData\windows-codex-downloads"
-exit (Get-TfwcLastExitCode)
+exit $startResult.ExitCode
