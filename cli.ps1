@@ -224,7 +224,7 @@ function Start-TfwcWorker {
     )
 
     $global:LASTEXITCODE = 0
-    $upArgs = (Get-TfwcComposeArguments) + @("up", "-d", "--no-build", "--remove-orphans")
+    $upArgs = @(Get-TfwcComposeArguments) + @("up", "-d", "--no-build", "--remove-orphans")
     if ($ForceRecreate) {
         $upArgs += "--force-recreate"
     }
@@ -243,7 +243,7 @@ function Test-TfwcContainerPathExists {
         [Parameter(Mandatory = $true)][string]$ContainerPath
     )
 
-    $result = Invoke-TfwcHiddenProcess -FilePath $Docker -Arguments ((Get-TfwcComposeArguments) + @("exec", "-T", "worker", "test", "-d", $ContainerPath)) -SuppressOutput
+    $result = Invoke-TfwcHiddenProcess -FilePath $Docker -Arguments (@(Get-TfwcComposeArguments) + @("exec", "-T", "worker", "test", "-d", $ContainerPath)) -SuppressOutput
     return $result.ExitCode -eq 0
 }
 
@@ -323,7 +323,7 @@ $script:TfwcCliExitCode = 0
 Invoke-TfwcWithFileLock -LockName "docker-compose.lock" -ScriptBlock {
     Start-TfwcWorker -Docker $docker
     Ensure-TfwcConfiguredMount -Docker $docker
-    $cliResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments ((Get-TfwcComposeArguments) + @("exec", "-T", "worker", "python", "-m", "timeline_for_windows_codex_worker") + @($CliArgs)) -WriteOutput
+    $cliResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("exec", "-T", "worker", "python", "-m", "timeline_for_windows_codex_worker") + @($CliArgs)) -WriteOutput
     $script:TfwcCliExitCode = $cliResult.ExitCode
 }
 exit $script:TfwcCliExitCode

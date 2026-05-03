@@ -187,7 +187,7 @@ if ($dockerInfo.ExitCode -ne 0) {
 
 Write-Host "Starting TimelineForWindowsCodex worker..."
 $global:LASTEXITCODE = 0
-$startResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments ((Get-TfwcComposeArguments) + @("up", "-d", "--build", "worker")) -WriteOutput
+$startResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("up", "-d", "--build", "worker")) -WriteOutput
 if ($startResult.ExitCode -ne 0) { throw "docker compose failed." }
 
 Write-Host ""

@@ -120,5 +120,5 @@ if ($dockerInfo.ExitCode -ne 0) {
     throw "Docker Desktop is installed but the Docker engine is not ready."
 }
 
-$stopResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments ((Get-TfwcComposeArguments) + @("stop", "worker")) -WriteOutput
+$stopResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("stop", "worker")) -WriteOutput
 exit $stopResult.ExitCode
