@@ -13,7 +13,6 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SETTINGS_PATH = REPO_ROOT / "settings.json"
 FIXTURE_CODEX_HOME = REPO_ROOT / "tests" / "fixtures" / "codex-home-min"
 FIXTURE_ARCHIVE_HOME = REPO_ROOT / "tests" / "fixtures" / "archived-root-min"
 FIXTURE_THREAD_ID = "11111111-2222-3333-4444-555555555555"
@@ -31,9 +30,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Keep the temporary C:\\TimelineData smoke output for manual inspection.",
     )
     parser.add_argument(
-        "--skip-restore-service",
+        "--keep-compose-project",
         action="store_true",
-        help="Do not recreate the normal worker service after the smoke test.",
+        help="Do not remove the temporary Docker Compose project after the smoke test.",
     )
     args = parser.parse_args(argv)
 
@@ -42,15 +41,24 @@ def main(argv: list[str] | None = None) -> int:
     smoke_root = timeline_data / f"tfwc-cli-ps1-smoke-{int(time.time())}"
     master_root = smoke_root / "master"
     download_root = smoke_root / "downloads"
-    master_root.mkdir(parents=True, exist_ok=True)
-    download_root.mkdir(parents=True, exist_ok=True)
+    settings_root = smoke_root / "settings"
+    appdata_root = smoke_root / "app-data"
+    shared_downloads_root = smoke_root / "shared-downloads"
+    settings_path = settings_root / "settings.json"
+    for directory in (master_root, download_root, settings_root, appdata_root, shared_downloads_root):
+        directory.mkdir(parents=True, exist_ok=True)
 
-    original_settings = SETTINGS_PATH.read_bytes() if SETTINGS_PATH.exists() else None
-    original_settings_existed = SETTINGS_PATH.exists()
-    mount_env = _build_smoke_mount_env(timeline_data)
+    compose_project_name = f"tfwc-cli-ps1-smoke-{int(time.time())}"
+    mount_env = _build_smoke_mount_env(
+        timeline_data=timeline_data,
+        settings_path=settings_path,
+        appdata_root=appdata_root,
+        shared_downloads_root=shared_downloads_root,
+        compose_project_name=compose_project_name,
+    )
 
     try:
-        _write_settings(master_root)
+        _write_settings(settings_path, master_root)
         _force_recreate_worker_service(mount_env)
         refresh = _json_from_stdout(
             _run_cli(powershell, ["items", "refresh", "--json"], mount_env).stdout
@@ -82,9 +90,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     finally:
-        _restore_settings(original_settings, original_settings_existed)
-        if not args.skip_restore_service:
-            _restore_default_worker_service(powershell)
+        if not args.keep_compose_project:
+            _cleanup_smoke_compose_project(mount_env)
         if not args.preserve_output:
             shutil.rmtree(smoke_root, ignore_errors=True)
 
@@ -108,8 +115,19 @@ def _timeline_data_root() -> Path:
     raise RuntimeError("This smoke test requires Windows C: drive access.")
 
 
-def _build_smoke_mount_env(timeline_data: Path) -> dict[str, str]:
+def _build_smoke_mount_env(
+    *,
+    timeline_data: Path,
+    settings_path: Path,
+    appdata_root: Path,
+    shared_downloads_root: Path,
+    compose_project_name: str,
+) -> dict[str, str]:
     return {
+        "COMPOSE_PROJECT_NAME": compose_project_name,
+        "HOST_TFWC_APP_DATA": _to_windows_path(appdata_root),
+        "HOST_TFWC_SETTINGS_FILE": _to_windows_path(settings_path),
+        "HOST_TFWC_DOWNLOADS": _to_windows_path(shared_downloads_root),
         "HOST_TIMELINE_DATA": _to_windows_path(timeline_data),
         "HOST_CODEX_HOME": _to_windows_path(FIXTURE_CODEX_HOME),
         "HOST_CODEX_BACKUP_HOME": _to_windows_path(FIXTURE_ARCHIVE_HOME),
@@ -117,8 +135,8 @@ def _build_smoke_mount_env(timeline_data: Path) -> dict[str, str]:
     }
 
 
-def _write_settings(master_root: Path) -> None:
-    SETTINGS_PATH.write_text(
+def _write_settings(settings_path: Path, master_root: Path) -> None:
+    settings_path.write_text(
         json.dumps(
             {
                 "schemaVersion": 1,
@@ -130,13 +148,6 @@ def _write_settings(master_root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-
-
-def _restore_settings(original_settings: bytes | None, original_settings_existed: bool) -> None:
-    if original_settings_existed and original_settings is not None:
-        SETTINGS_PATH.write_bytes(original_settings)
-    elif SETTINGS_PATH.exists():
-        SETTINGS_PATH.unlink()
 
 
 def _run_cli(
@@ -239,7 +250,11 @@ def _force_recreate_worker_service(mount_env: dict[str, str]) -> None:
         f"set {name}={value}"
         for name, value in mount_env.items()
     )
-    command_text = f"{env_script}&&docker compose up -d --no-build --force-recreate --remove-orphans worker"
+    project_name = mount_env.get("COMPOSE_PROJECT_NAME") or "tfwc-cli-ps1-smoke"
+    command_text = (
+        f"{env_script}&&docker compose -p {project_name} "
+        "up -d --no-build --force-recreate --remove-orphans worker"
+    )
     completed = subprocess.run(
         ["cmd.exe", "/c", command_text],
         cwd=REPO_ROOT,
@@ -264,17 +279,14 @@ def _force_recreate_worker_service(mount_env: dict[str, str]) -> None:
         )
 
 
-def _restore_default_worker_service(powershell: str) -> None:
+def _cleanup_smoke_compose_project(mount_env: dict[str, str]) -> None:
     if shutil.which("cmd.exe"):
-        command_text = "&&".join(
-            [
-                "set HOST_TIMELINE_DATA=C:\\TimelineData",
-                "set HOST_CODEX_HOME=%USERPROFILE%\\.codex",
-                "set HOST_CODEX_BACKUP_HOME=C:\\Codex\\archive\\migration-backup-2026-03-27\\codex-home",
-                "set HOST_CODEX_ROOT=C:\\Codex",
-            ]
+        env_script = "&&".join(
+            f"set {name}={value}"
+            for name, value in mount_env.items()
         )
-        command_text = f"{command_text}&&docker compose up -d --no-build --force-recreate worker >nul"
+        project_name = mount_env.get("COMPOSE_PROJECT_NAME") or "tfwc-cli-ps1-smoke"
+        command_text = f"{env_script}&&docker compose -p {project_name} down --remove-orphans -v"
         subprocess.run(
             ["cmd.exe", "/c", command_text],
             cwd=REPO_ROOT,
@@ -287,24 +299,21 @@ def _restore_default_worker_service(powershell: str) -> None:
         )
         return
 
+    env = os.environ.copy()
+    env.update(mount_env)
     command = [
-        powershell,
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        (
-            f"Set-Location '{_to_windows_path(REPO_ROOT)}'; "
-            "$env:HOST_TIMELINE_DATA='C:\\TimelineData'; "
-            "$env:HOST_CODEX_HOME=(Join-Path $env:USERPROFILE '.codex'); "
-            "$env:HOST_CODEX_BACKUP_HOME='C:\\Codex\\archive\\migration-backup-2026-03-27\\codex-home'; "
-            "$env:HOST_CODEX_ROOT='C:\\Codex'; "
-            "docker compose up -d --no-build --force-recreate worker *> $null"
-        ),
+        "docker",
+        "compose",
+        "-p",
+        mount_env.get("COMPOSE_PROJECT_NAME") or "tfwc-cli-ps1-smoke",
+        "down",
+        "--remove-orphans",
+        "-v",
     ]
     subprocess.run(
         command,
         cwd=REPO_ROOT,
+        env=env,
         check=False,
         capture_output=True,
         text=True,

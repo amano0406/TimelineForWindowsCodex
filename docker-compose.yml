@@ -2,6 +2,7 @@ name: timeline-for-windows-codex
 
 services:
   worker:
+    image: timeline-for-windows-codex-worker
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
@@ -12,10 +13,10 @@ services:
       TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT: /shared/app-data
       TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH: /shared/app-data/settings.json
     volumes:
-      - app-data:/shared/app-data
-      - ./downloads:/shared/downloads
+      - ${HOST_TFWC_APP_DATA:-app-data}:/shared/app-data
+      - ${HOST_TFWC_DOWNLOADS:-./downloads}:/shared/downloads
       - ${HOST_TIMELINE_DATA:-/mnt/c/TimelineData}:/mnt/c/TimelineData
-      - ./settings.json:/shared/app-data/settings.json
+      - ${HOST_TFWC_SETTINGS_FILE:-./settings.json}:/shared/app-data/settings.json
       - ${HOST_CODEX_HOME:-/mnt/c/Users/amano/.codex}:/input/codex-home:ro
       - ${HOST_CODEX_BACKUP_HOME:-/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home}:/input/codex-backup:ro
       - ${HOST_CODEX_ROOT:-/mnt/c/Codex}:/input/codex-root:ro

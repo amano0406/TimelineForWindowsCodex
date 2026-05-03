@@ -56,7 +56,7 @@
 - [x] CLI で refresh から ZIP 作成まで行う `items refresh --download-to` を持っている
 - [x] CLI で item id 指定なしなら全 thread 対象にできる
 - [x] CLI で item id を複数指定できる
-- [x] 複数 source root を settings に保存できる
+- [x] source root は settings に保存せず、Docker Compose の read-only mount として固定できる
 - [x] master output root を settings に保存できる
 - [x] repo root の `settings.example.json` を Git 管理している
 - [x] repo root の `settings.json` を Git 管理外にしている
@@ -79,6 +79,7 @@
 - [x] CLI `items refresh --download-to` の fixture 確認がある
 - [x] 本物または fixture の `.codex` を一時出力先で読む production-like smoke test がある
 - [x] Docker Compose 経由の production-like smoke test がある
+- [x] ローカル `cli.ps1` 経由の download smoke test がある
 - [x] ZIP に `README.md` と `items/<thread_id>/convert_info.json` / `items/<thread_id>/timeline.json` が入ることを確認している
 
 ## H. 低優先または範囲外

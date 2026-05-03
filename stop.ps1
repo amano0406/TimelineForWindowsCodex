@@ -80,6 +80,7 @@ function Invoke-TfwcHiddenProcess {
         $startInfo.EnvironmentVariables["PATH"] = $updatedPath
         $startInfo.EnvironmentVariables["Path"] = $updatedPath
     }
+    $startInfo.EnvironmentVariables["PATHEXT"] = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL"
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -102,11 +103,22 @@ function Invoke-TfwcHiddenProcess {
     }
 }
 
+function Get-TfwcComposeArguments {
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    $arguments.Add("compose") | Out-Null
+    $projectName = [Environment]::GetEnvironmentVariable("COMPOSE_PROJECT_NAME", "Process")
+    if (-not [string]::IsNullOrWhiteSpace($projectName)) {
+        $arguments.Add("-p") | Out-Null
+        $arguments.Add($projectName) | Out-Null
+    }
+    return $arguments.ToArray()
+}
+
 $docker = Get-TfwcDockerCommand
 $dockerInfo = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments @("info") -SuppressOutput
 if ($dockerInfo.ExitCode -ne 0) {
     throw "Docker Desktop is installed but the Docker engine is not ready."
 }
 
-$stopResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments @("compose", "stop", "worker") -WriteOutput
+$stopResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments ((Get-TfwcComposeArguments) + @("stop", "worker")) -WriteOutput
 exit $stopResult.ExitCode

@@ -146,6 +146,8 @@ cp .env.example .env
 
 Source mounts are read-only. `settings.json` is mounted into the container as `/shared/app-data/settings.json` and survives container rebuilds because it lives in the repo root.
 
+Operational tests do not rewrite the normal `settings.json`. They override `HOST_TFWC_SETTINGS_FILE`, `HOST_TFWC_APP_DATA`, `HOST_TFWC_DOWNLOADS`, and `COMPOSE_PROJECT_NAME` with temporary values so fixture inputs and temporary outputs stay isolated.
+
 Stop the worker service container:
 
 ```powershell
@@ -177,6 +179,7 @@ python tests/smoke/run_docker_compose_refresh.py
 ```
 
 The smoke test runs refresh twice, verifies the fixed master contract, verifies the download ZIP contract, and checks that unchanged threads are skipped on the second refresh.
+By default it prints only compact run summaries. Pass `--include-full-payload` only when item-level debug output is needed.
 
 Local `cli.ps1` download smoke test:
 
@@ -184,4 +187,4 @@ Local `cli.ps1` download smoke test:
 python tests/smoke/run_cli_ps1_download.py
 ```
 
-This test temporarily writes a fixture-only `settings.json`, runs `cli.ps1 items refresh`, runs `cli.ps1 items download`, verifies the ZIP layout, then restores the original local settings file.
+This test writes a fixture-only `settings.json` to a temporary settings path, runs `cli.ps1 items refresh`, runs `cli.ps1 items download` in a dedicated Docker Compose project, and verifies the ZIP layout. It does not modify the normal local `settings.json` or the normal worker service container.

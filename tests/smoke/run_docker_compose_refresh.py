@@ -18,6 +18,7 @@ DEFAULT_SOURCE_ROOTS = [
     Path("/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home"),
 ]
 CONTAINER_SETTINGS_DIR = PurePosixPath("/smoke/settings")
+CONTAINER_CONFIG_DIR = PurePosixPath("/smoke/config")
 CONTAINER_APPDATA_DIR = PurePosixPath("/smoke/appdata")
 CONTAINER_OUTPUT_DIR = PurePosixPath("/smoke/output")
 CONTAINER_IGNORED_OUTPUTS_DIR = PurePosixPath("/smoke/ignored")
@@ -48,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Keep the temporary output directory for manual inspection.",
     )
+    parser.add_argument(
+        "--include-full-payload",
+        action="store_true",
+        help="Print full refresh payloads including item details. Default output is compact.",
+    )
     args = parser.parse_args(argv)
 
     source_roots = _resolve_source_roots(args.source_root)
@@ -58,20 +64,24 @@ def main(argv: list[str] | None = None) -> int:
     runs = max(1, args.runs)
     temp_root = Path(tempfile.mkdtemp(prefix="tfwc-docker-smoke-"))
     settings_dir = temp_root / "settings"
+    config_dir = temp_root / "config"
     appdata_dir = temp_root / "appdata"
     output_dir = temp_root / "output"
     ignored_outputs_dir = temp_root / "ignored"
     download_dir = temp_root / "downloads"
-    for directory in (settings_dir, appdata_dir, output_dir, ignored_outputs_dir, download_dir):
+    for directory in (settings_dir, config_dir, appdata_dir, output_dir, ignored_outputs_dir, download_dir):
         directory.mkdir(parents=True, exist_ok=True)
     compose_file = temp_root / "docker-compose.smoke.yml"
     project_name = f"tfwc-smoke-{temp_root.name.lower()}"
 
     try:
         source_mounts = _build_source_mounts(source_roots)
+        _write_smoke_settings(settings_dir)
+        _write_smoke_runtime_defaults(config_dir, source_mounts)
         _write_smoke_compose_file(
             compose_file=compose_file,
             settings_dir=settings_dir,
+            config_dir=config_dir,
             appdata_dir=appdata_dir,
             output_dir=output_dir,
             ignored_outputs_dir=ignored_outputs_dir,
@@ -81,44 +91,6 @@ def main(argv: list[str] | None = None) -> int:
         _run_compose_process(
             [*_compose_base_command(compose_file, project_name), "up", "-d", "--build", "worker"],
             capture_json=False,
-        )
-        for source_mount in source_mounts:
-            _run_compose_json(
-                [
-                    "settings",
-                    "inputs",
-                    "add",
-                    str(source_mount.container_path),
-                    "--format",
-                    "json",
-                ],
-                settings_dir=settings_dir,
-                appdata_dir=appdata_dir,
-                output_dir=output_dir,
-                ignored_outputs_dir=ignored_outputs_dir,
-                download_dir=download_dir,
-                source_mounts=source_mounts,
-                compose_file=compose_file,
-                project_name=project_name,
-            )
-
-        _run_compose_json(
-            [
-                "settings",
-                "master",
-                "set",
-                str(CONTAINER_OUTPUT_DIR),
-                "--format",
-                "json",
-            ],
-            settings_dir=settings_dir,
-            appdata_dir=appdata_dir,
-            output_dir=output_dir,
-            ignored_outputs_dir=ignored_outputs_dir,
-            download_dir=download_dir,
-            source_mounts=source_mounts,
-            compose_file=compose_file,
-            project_name=project_name,
         )
 
         refresh_payloads: list[dict[str, Any]] = []
@@ -145,22 +117,27 @@ def main(argv: list[str] | None = None) -> int:
             inspections.append(_inspect_refresh(refresh_payload, output_dir, download_dir))
         _assert_valid(refresh_payloads, inspections)
 
-        summary = {
+        summary: dict[str, Any] = {
             "state": "ok",
             "production_like": True,
             "runtime": "docker_compose",
             "source_roots": [str(path) for path in source_roots],
-            "runs": refresh_payloads,
+            "runs": [
+                _summarize_refresh_payload(payload, inspection)
+                for payload, inspection in zip(refresh_payloads, inspections, strict=True)
+            ],
             "inspections": inspections,
             "host_output_root": str(output_dir),
             "output_preserved": args.preserve_output,
         }
+        if args.include_full_payload:
+            summary["full_payloads"] = refresh_payloads
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
     finally:
         if compose_file.exists():
             _run_compose_process(
-                [*_compose_base_command(compose_file, project_name), "down", "--remove-orphans", "-v"],
+                [*_compose_base_command(compose_file, project_name), "down", "--remove-orphans", "-v", "--rmi", "local"],
                 capture_json=False,
                 check=False,
             )
@@ -225,10 +202,40 @@ def _run_compose_json(
     return json.loads(completed.stdout)
 
 
+def _write_smoke_settings(settings_dir: Path) -> None:
+    (settings_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "outputRoot": str(CONTAINER_OUTPUT_DIR),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_smoke_runtime_defaults(config_dir: Path, source_mounts: list[SourceMount]) -> None:
+    (config_dir / "runtime.defaults.json").write_text(
+        json.dumps(
+            {
+                "sourceRoots": [str(source_mount.container_path) for source_mount in source_mounts],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_smoke_compose_file(
     *,
     compose_file: Path,
     settings_dir: Path,
+    config_dir: Path,
     appdata_dir: Path,
     output_dir: Path,
     ignored_outputs_dir: Path,
@@ -237,6 +244,7 @@ def _write_smoke_compose_file(
 ) -> None:
     volume_lines = [
         f"      - {_quoted_volume(settings_dir, CONTAINER_SETTINGS_DIR)}",
+        f"      - {_quoted_volume(config_dir, CONTAINER_CONFIG_DIR, read_only=True)}",
         f"      - {_quoted_volume(appdata_dir, CONTAINER_APPDATA_DIR)}",
         f"      - {_quoted_volume(output_dir, CONTAINER_OUTPUT_DIR)}",
         f"      - {_quoted_volume(ignored_outputs_dir, CONTAINER_IGNORED_OUTPUTS_DIR)}",
@@ -256,7 +264,7 @@ def _write_smoke_compose_file(
                 "    entrypoint: [\"sleep\", \"infinity\"]",
                 "    environment:",
                 "      TIMELINE_FOR_WINDOWS_CODEX_RUNTIME: docker",
-                f"      TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS: {_yaml_string('/app/config/runtime.defaults.json')}",
+                f"      TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS: {_yaml_string(CONTAINER_CONFIG_DIR / 'runtime.defaults.json')}",
                 f"      TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH: {_yaml_string(CONTAINER_SETTINGS_DIR / 'settings.json')}",
                 f"      TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT: {_yaml_string(CONTAINER_APPDATA_DIR)}",
                 f"      TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT: {_yaml_string(CONTAINER_IGNORED_OUTPUTS_DIR)}",
@@ -352,6 +360,36 @@ def _inspect_refresh(payload: dict[str, Any], output_dir: Path, download_dir: Pa
         "zip_timeline_json_count": timeline_json_count,
         "zip_convert_json_count": convert_json_count,
     }
+
+
+def _summarize_refresh_payload(payload: dict[str, Any], inspection: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "refresh_id": payload.get("refresh_id"),
+        "state": payload.get("state"),
+        "master_root": payload.get("master_root"),
+        "completed_at": payload.get("completed_at"),
+        "thread_count": payload.get("thread_count"),
+        "message_count": payload.get("message_count"),
+        "attachment_count": payload.get("attachment_count"),
+        "update_counts": payload.get("update_counts"),
+        "processing_mode": payload.get("processing_mode"),
+        "reused_thread_count": payload.get("reused_thread_count"),
+        "rendered_thread_count": payload.get("rendered_thread_count"),
+        "processing_duration_ms": payload.get("processing_duration_ms"),
+        "download": {
+            "state": _download_payload(payload).get("state"),
+            "destination_path": _download_payload(payload).get("destination_path"),
+            "thread_count": _download_payload(payload).get("thread_count"),
+            "message_count": _download_payload(payload).get("message_count"),
+            "attachment_count": _download_payload(payload).get("attachment_count"),
+        },
+        "inspection": inspection,
+    }
+
+
+def _download_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    download = payload.get("download")
+    return download if isinstance(download, dict) else {}
 
 
 def _container_output_path_to_host(container_path: str, output_dir: Path) -> Path:

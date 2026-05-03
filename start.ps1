@@ -17,9 +17,24 @@ function Get-TfwcDockerCommand {
     throw "docker.exe was not found. Install or start Docker Desktop."
 }
 
+function Get-TfwcHostSettingsPath {
+    $settingsPath = [Environment]::GetEnvironmentVariable("HOST_TFWC_SETTINGS_FILE", "Process")
+    if ([string]::IsNullOrWhiteSpace($settingsPath)) {
+        $settingsPath = Join-Path $repoRoot "settings.json"
+    }
+    elseif (-not [System.IO.Path]::IsPathRooted($settingsPath)) {
+        $settingsPath = Join-Path $repoRoot $settingsPath
+    }
+    return [System.IO.Path]::GetFullPath($settingsPath)
+}
+
 function Initialize-TfwcSettingsFile {
-    $settingsPath = Join-Path $repoRoot "settings.json"
+    $settingsPath = Get-TfwcHostSettingsPath
     if (-not (Test-Path -LiteralPath $settingsPath)) {
+        $settingsDir = Split-Path -Parent $settingsPath
+        if ($settingsDir -and -not (Test-Path -LiteralPath $settingsDir)) {
+            New-Item -ItemType Directory -Path $settingsDir | Out-Null
+        }
         Copy-Item -LiteralPath (Join-Path $repoRoot "settings.example.json") -Destination $settingsPath
     }
 
@@ -30,7 +45,7 @@ function Initialize-TfwcSettingsFile {
 }
 
 function Get-TfwcConfiguredOutputRoot {
-    $settingsPath = Join-Path $repoRoot "settings.json"
+    $settingsPath = Get-TfwcHostSettingsPath
     if (-not (Test-Path -LiteralPath $settingsPath)) {
         return $null
     }
@@ -62,6 +77,17 @@ function Initialize-TfwcDockerMountEnvironment {
     Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_HOME" -Value (Join-Path $env:USERPROFILE ".codex")
     Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_BACKUP_HOME" -Value "C:\Codex\archive\migration-backup-2026-03-27\codex-home"
     Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_ROOT" -Value "C:\Codex"
+}
+
+function Get-TfwcComposeArguments {
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    $arguments.Add("compose") | Out-Null
+    $projectName = [Environment]::GetEnvironmentVariable("COMPOSE_PROJECT_NAME", "Process")
+    if (-not [string]::IsNullOrWhiteSpace($projectName)) {
+        $arguments.Add("-p") | Out-Null
+        $arguments.Add($projectName) | Out-Null
+    }
+    return $arguments.ToArray()
 }
 
 function Get-TfwcLastExitCode {
@@ -128,6 +154,7 @@ function Invoke-TfwcHiddenProcess {
         $startInfo.EnvironmentVariables["PATH"] = $updatedPath
         $startInfo.EnvironmentVariables["Path"] = $updatedPath
     }
+    $startInfo.EnvironmentVariables["PATHEXT"] = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL"
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -160,7 +187,7 @@ if ($dockerInfo.ExitCode -ne 0) {
 
 Write-Host "Starting TimelineForWindowsCodex worker..."
 $global:LASTEXITCODE = 0
-$startResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments @("compose", "up", "-d", "--build", "worker") -WriteOutput
+$startResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments ((Get-TfwcComposeArguments) + @("up", "-d", "--build", "worker")) -WriteOutput
 if ($startResult.ExitCode -ne 0) { throw "docker compose failed." }
 
 Write-Host ""

@@ -145,6 +145,8 @@ cp .env.example .env
 
 source mount は read-only です。`settings.json` は container 内の `/shared/app-data/settings.json` に mount されます。
 
+運用テストでは本番の `settings.json` を書き換えません。`HOST_TFWC_SETTINGS_FILE`, `HOST_TFWC_APP_DATA`, `HOST_TFWC_DOWNLOADS`, `COMPOSE_PROJECT_NAME` を一時値へ差し替え、fixture 入力と一時出力先だけを使います。
+
 worker service container を停止:
 
 ```powershell
@@ -176,6 +178,7 @@ python tests/smoke/run_docker_compose_refresh.py
 ```
 
 この smoke test は refresh を 2 回実行し、master 契約、download ZIP 契約、2 回目の unchanged skip を確認します。
+既定では集計だけを出力します。item 単位の詳細デバッグが必要な場合だけ `--include-full-payload` を指定します。
 
 ローカル `cli.ps1` download smoke test:
 
@@ -183,4 +186,4 @@ python tests/smoke/run_docker_compose_refresh.py
 python tests/smoke/run_cli_ps1_download.py
 ```
 
-このテストは fixture 用の `settings.json` を一時的に書き、`cli.ps1 items refresh` と `cli.ps1 items download` を実行し、ZIP 構成を検証してから元のローカル設定を復元します。
+このテストは一時 settings path に fixture 用の `settings.json` を作成し、専用 Docker Compose project で `cli.ps1 items refresh` と `cli.ps1 items download` を実行して ZIP 構成を検証します。本番用の `settings.json` と通常の worker service container は変更しません。
