@@ -188,6 +188,14 @@ python tests/smoke/run_cli_ps1_download.py
 
 このテストは一時 settings path に fixture 用の `settings.json` を作成し、専用 Docker Compose project で `cli.ps1 items refresh` と `cli.ps1 items download` を実行して ZIP 構成を検証します。本番用の `settings.json` と通常の worker service container は変更しません。
 
+Raw source to timeline fidelity audit:
+
+```powershell
+python tests/smoke/run_fidelity_audit.py
+```
+
+この audit は代表 source の raw transcript から期待される message chain を読み、生成済みまたは一時生成した `timeline.json` / `convert_info.json` と照合します。role、時刻、本文、添付ラベル、message count、旧 `thread.json` / `convert.json` の不在を確認します。
+
 Windows launcher operational smoke test:
 
 ```powershell
@@ -202,4 +210,4 @@ python tests/smoke/run_windows_launcher_flow.py
 .\test-operational.bat
 ```
 
-これは `cli.ps1` download smoke test、Windows launcher operational smoke test、Docker production-like smoke test を順番に実行します。テスト用の一時 settings / source / output を使うため、通常運用の master 出力先は変更しません。
+これは `cli.ps1` download smoke test、raw source to timeline fidelity audit、Windows launcher operational smoke test、Docker production-like smoke test を順番に実行します。テスト用の一時 settings / source / output を使うため、通常運用の master 出力先は変更しません。

@@ -80,6 +80,7 @@
 - [x] 本物または fixture の `.codex` を一時出力先で読む production-like smoke test がある
 - [x] Docker Compose 経由の production-like smoke test がある
 - [x] ローカル `cli.ps1` 経由の download smoke test がある
+- [x] raw source と `timeline.json` / `convert_info.json` を照合する fidelity audit がある
 - [x] Windows 正面玄関の `start.bat` / `cli.bat` / `stop.bat` を通す launcher smoke test がある
 - [x] Windows 正面玄関から一括で安定性確認できる `test-operational.bat` がある
 - [x] ZIP に `README.md` と `items/<thread_id>/convert_info.json` / `items/<thread_id>/timeline.json` が入ることを確認している
@@ -96,6 +97,6 @@
 ## I. 安定性強化の次候補
 
 - [ ] 実 `.codex` を一時 master 出力先へ読む production-like smoke test を定期運用する
-- [ ] 代表スレッドで raw JSONL と `timeline.json` を目視比較する fidelity audit 手順を作る
+- [ ] 実 `.codex` の代表スレッドで raw JSONL と `timeline.json` を目視比較する運用手順を作る
 - [ ] Windows host Python で unit / integration test を直接回す必要が出た場合だけ、dev test の path 正規化を追加する
 - [ ] ignored の `downloads/` に溜まる手動 ZIP の整理方針を決める

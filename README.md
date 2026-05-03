@@ -189,6 +189,14 @@ python tests/smoke/run_cli_ps1_download.py
 
 This test writes a fixture-only `settings.json` to a temporary settings path, runs `cli.ps1 items refresh`, runs `cli.ps1 items download` in a dedicated Docker Compose project, and verifies the ZIP layout. It does not modify the normal local `settings.json` or the normal worker service container.
 
+Raw source to timeline fidelity audit:
+
+```powershell
+python tests/smoke/run_fidelity_audit.py
+```
+
+This audit reads the expected message chain from representative raw source transcripts, then compares it with generated or existing `timeline.json` / `convert_info.json` artifacts. It checks role, timestamp, text, attachment labels, message count, and absence of legacy `thread.json` / `convert.json` files.
+
 Windows launcher operational smoke test:
 
 ```powershell
@@ -203,4 +211,4 @@ Run the normal operational stability suite:
 .\test-operational.bat
 ```
 
-This runs the `cli.ps1` download smoke test, the Windows launcher operational smoke test, and the Docker production-like smoke test in sequence. It uses temporary settings / source / output paths, so it does not modify the normal master output root.
+This runs the `cli.ps1` download smoke test, raw source to timeline fidelity audit, the Windows launcher operational smoke test, and the Docker production-like smoke test in sequence. It uses temporary settings / source / output paths, so it does not modify the normal master output root.

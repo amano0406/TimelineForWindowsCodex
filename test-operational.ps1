@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$SkipCliSmoke,
+    [switch]$SkipFidelityAudit,
     [switch]$SkipLauncherSmoke,
     [switch]$SkipDockerSmoke,
     [switch]$PreserveOutput
@@ -86,6 +87,14 @@ try {
         Invoke-TfwcPython -Name "cli.ps1 download smoke test" -Arguments @(
             (Join-Path $repoRoot "tests\smoke\run_cli_ps1_download.py")
         )
+    }
+
+    if (-not $SkipFidelityAudit) {
+        $fidelityArgs = @((Join-Path $repoRoot "tests\smoke\run_fidelity_audit.py"))
+        if ($PreserveOutput) {
+            $fidelityArgs += "--preserve-output"
+        }
+        Invoke-TfwcPython -Name "Raw source to timeline fidelity audit" -Arguments $fidelityArgs
     }
 
     if (-not $SkipLauncherSmoke) {
