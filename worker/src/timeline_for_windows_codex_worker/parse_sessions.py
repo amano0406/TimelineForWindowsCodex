@@ -39,6 +39,9 @@ def sanitize_multiline_text(raw_text: str | None, *, profile: str = "strict", ma
 
 
 def _apply_redaction(text: str, *, profile: str) -> str:
+    if profile == "none":
+        return text
+
     text = _EMAIL_RE.sub("[email]", text)
     text = _URL_RE.sub("[url]", text)
 

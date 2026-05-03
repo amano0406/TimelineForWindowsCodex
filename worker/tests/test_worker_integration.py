@@ -68,12 +68,10 @@ class ProcessRefreshIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(len(thread_payload["messages"]), 1)
             self.assertNotIn("observed_thread_name", message_text)
             self.assertIn("000.txt", attachment_names)
-            self.assertIn("[email]", message_text)
-            self.assertIn("token=[redacted]", message_text)
+            self.assertIn("hello@example.com", message_text)
+            self.assertIn("token=secret123", message_text)
             self.assertNotIn("git status", message_text)
             self.assertNotIn("On branch main", message_text)
-            self.assertNotIn("hello@example.com", message_text)
-            self.assertNotIn("secret123", message_text)
             self.assertEqual(convert_payload["application"], "TimelineForWindowsCodex")
             self.assertEqual(convert_payload["thread_id"], FIXTURE_THREAD_ID)
             self.assertEqual(convert_payload["title"], "Codex timeline sample thread")
@@ -238,7 +236,7 @@ class ProcessRefreshIntegrationTests(unittest.TestCase):
                 fixture_root=ARCHIVED_FIXTURE_ROOT,
                 thread_id=ARCHIVED_THREAD_ID,
                 preferred_title="Archived timeline source",
-                first_prompt_excerpt="Summarize follow-up for [email] with token=[redacted]",
+                first_prompt_excerpt="Summarize follow-up for archived@example.com with token=legacy-secret",
             )
 
             summary = process_refresh(request, Path(temp_dir) / "master")
@@ -249,8 +247,8 @@ class ProcessRefreshIntegrationTests(unittest.TestCase):
 
             self.assertEqual(summary["thread_count"], 1)
             self.assertEqual(convert_payload["source_session"]["type"], "thread_read_json")
-            self.assertIn("[email]", message_text)
-            self.assertIn("token=[redacted]", message_text)
+            self.assertIn("archived@example.com", message_text)
+            self.assertIn("token=legacy-secret", message_text)
             self.assertIn("I am checking the archived thread and preparing a handoff.", message_text)
             self.assertIn("Archived thread summary is ready.", message_text)
 
@@ -308,7 +306,7 @@ class ProcessRefreshIntegrationTests(unittest.TestCase):
                 fixture_root=fixture_root,
                 thread_id=rich_thread_id,
                 preferred_title="Rich archived thread",
-                first_prompt_excerpt="Please review [email]. token=[redacted]",
+                first_prompt_excerpt="Please review rich@example.com. token=rich-secret",
             )
             process_refresh(request, temp_root / "master")
 
@@ -323,10 +321,8 @@ class ProcessRefreshIntegrationTests(unittest.TestCase):
             self.assertIn("I found the archived summary and prepared the export.", message_text)
             self.assertIn("rich-note.txt", attachment_names)
             self.assertIn("reply-note.md", attachment_names)
-            self.assertIn("[email]", message_text)
-            self.assertIn("token=[redacted]", message_text)
-            self.assertNotIn("rich@example.com", message_text)
-            self.assertNotIn("rich-secret", message_text)
+            self.assertIn("rich@example.com", message_text)
+            self.assertIn("token=rich-secret", message_text)
 
     def test_process_refresh_skips_malformed_session_record_and_completes(self) -> None:
         malformed_thread_id = "99999999-aaaa-bbbb-cccc-dddddddddddd"
@@ -387,7 +383,7 @@ class ProcessRefreshIntegrationTests(unittest.TestCase):
             include_archived_sources=True,
             include_tool_outputs=False,
             include_compaction_recovery=include_compaction_recovery,
-            redaction_profile="strict",
+            redaction_profile="none",
             selected_threads=[
                 ThreadSelection(
                     thread_id=thread_id,

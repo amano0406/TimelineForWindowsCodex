@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import json
 import re
+import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +35,12 @@ def write_json_atomic(path: Path, payload: dict[str, Any] | list[Any]) -> None:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
         temp_path = Path(handle.name)
-    temp_path.replace(path)
+    try:
+        temp_path.replace(path)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.move(str(temp_path), str(path))
 
 
 def write_text(path: Path, text: str) -> None:

@@ -8,11 +8,12 @@ This product is CLI-only. There is no Web UI. The main job is to keep a fixed ma
 
 ## What It Does
 
-- Reads one or more configured Codex history source roots.
+- Reads the fixed local Codex history roots mounted by Docker Compose.
 - Discovers threads from `sessions/**/*.jsonl`, `session_index.jsonl`, archived `thread_reads`, and `state_5.sqlite` fallback metadata.
 - Writes one master directory per thread.
 - Stores normalized conversation text in `timeline.json`.
 - Stores source/conversion metadata in `convert_info.json`.
+- Lists items newest-first with optional paging.
 - Skips unchanged thread output when the source and conversion settings have not changed.
 - Builds timestamped download ZIP files on demand.
 - Leaves global readable timeline rendering, date filtering, and higher-level analysis to downstream products.
@@ -36,16 +37,28 @@ Normal Docker Compose operation uses the repo-root local settings file:
 C:\apps\TimelineForWindowsCodex\settings.json
 ```
 
-`settings.json` is intentionally not committed. It is treated like `.env`: each machine keeps its own source roots and output root. The launcher scripts create it from `settings.example.json` when it is missing.
+`settings.json` is intentionally not committed. It is treated like `.env`: each machine keeps its own output root. The launcher scripts create it from `settings.example.json` when it is missing.
 
 The settings file contains:
 
-- `source_roots`: one or more Codex history directories to read
-- `outputs_root`: the fixed master artifact directory
-- `redaction_profile`: `strict` or `loose`
-- `include_archived_sources`: whether archived thread reads are included
-- `include_tool_outputs`: kept for compatibility, but normal `timeline.json` does not include tool-output logs
-- `include_compaction_recovery`: optional deep recovery from compaction `replacement_history`
+- `schemaVersion`: settings file format version
+- `outputRoot`: the fixed master artifact directory
+
+The Codex source roots are not user settings. Docker Compose mounts the current Codex home and the known backup location as fixed read-only inputs:
+
+- `C:\Users\amano\.codex` -> `/input/codex-home`
+- `C:\Codex\archive\migration-backup-2026-03-27\codex-home` -> `/input/codex-backup`
+
+Default example:
+
+```json
+{
+  "schemaVersion": 1,
+  "outputRoot": "C:\\TimelineData\\windows-codex"
+}
+```
+
+Archive sources are always read. Tool-output logs, terminal output, and compaction recovery are not user-configurable settings. Conversation text is exported without URL/email/token redaction because this tool is intended to preserve local evidence for later LLM analysis.
 
 ## Output Contract
 
@@ -92,26 +105,28 @@ items/
 
 ## CLI Usage
 
-Windows PowerShell is the front door. Run commands from the repository root:
+Windows uses the `.bat` launcher as the stable front door. It runs the PowerShell implementation with the expected execution policy from the repository root:
 
 ```powershell
-.\cli.ps1 settings init
-.\cli.ps1 settings status
-.\cli.ps1 settings inputs list
-.\cli.ps1 settings inputs add /input/codex-home
-.\cli.ps1 settings inputs remove input-1234abcd
-.\cli.ps1 settings inputs clear
-.\cli.ps1 settings master show
-.\cli.ps1 settings master set /shared/outputs
+.\cli.bat settings init
+.\cli.bat settings status
+.\cli.bat settings master show
+.\cli.bat settings master set C:\TimelineData\windows-codex
 
-.\cli.ps1 items list --json
-.\cli.ps1 items refresh --json
-.\cli.ps1 items refresh --download-to /shared/downloads --json
-.\cli.ps1 items download --to /shared/downloads
+.\cli.bat items list --json
+.\cli.bat items list --page 2 --page-size 50 --json
+.\cli.bat items list --all --json
+.\cli.bat items refresh --json
+.\cli.bat items refresh --download-to C:\TimelineData\windows-codex-downloads --json
+.\cli.bat items download --to C:\TimelineData\windows-codex-downloads
 ```
 
 Notes:
 
+- `items list` is sorted by `updated_at` descending. The newest item is shown first.
+- `items list` defaults to all items.
+- Pass `--page` / `--page-size` only when you want paging. `--page-size` defaults to `100` when paging is used.
+- `--all` explicitly returns every item and takes precedence over `--page` / `--page-size`.
 - Omit `--item-id` to refresh or download all discovered items.
 - Pass `--item-id` multiple times, or pass comma-separated ids, for selected items.
 - `items refresh` updates the fixed master directory.
@@ -120,13 +135,13 @@ Notes:
 
 ## Docker Compose
 
-Docker Compose keeps one project service container, `timeline-for-windows-codex-worker-1`, and `cli.ps1` executes commands inside it with `docker compose exec`. CLI commands should not create `worker-run-*` one-off containers. This product does not expose a browser UI.
+Docker Compose keeps one project service container, `timeline-for-windows-codex-worker-1`, and the CLI launcher executes commands inside it with `docker compose exec`. CLI commands start the existing worker with `--no-build`; use `start.bat` when the image needs to be built or rebuilt. CLI commands should not create `worker-run-*` one-off containers. This product does not expose a browser UI.
 
 ```powershell
 cp .env.example .env
-.\start.ps1
-.\cli.ps1 settings status
-.\cli.ps1 items refresh --json
+.\start.bat
+.\cli.bat settings status
+.\cli.bat items refresh --json
 ```
 
 Source mounts are read-only. `settings.json` is mounted into the container as `/shared/app-data/settings.json` and survives container rebuilds because it lives in the repo root.
@@ -134,16 +149,16 @@ Source mounts are read-only. `settings.json` is mounted into the container as `/
 Stop the worker service container:
 
 ```powershell
-.\stop.ps1
+.\stop.bat
 ```
 
 Uninstall Docker resources:
 
 ```powershell
-.\uninstall.ps1
+.\uninstall.bat
 ```
 
-The uninstall script does not delete Codex source history, `outputs`, or `downloads`. It asks separately before deleting the app-data Docker volume or local `settings.json`.
+The uninstall script does not delete Codex source history, the configured `outputRoot`, or `downloads`. It asks separately before deleting the app-data Docker volume or local `settings.json`.
 
 ## Testing
 

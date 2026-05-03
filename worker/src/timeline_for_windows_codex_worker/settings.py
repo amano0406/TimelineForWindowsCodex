@@ -19,57 +19,37 @@ class RuntimePaths:
 
 @dataclass
 class RuntimeDefaults:
-    default_primary_codex_home_path: str = "/input/codex-home"
-    default_backup_codex_home_paths: list[str] | None = None
-    default_redaction_profile: str = "strict"
-    default_include_archived_sources: bool = True
-    default_include_tool_outputs: bool = False
-    default_include_compaction_recovery: bool = False
+    source_roots: list[str] | None = None
 
     def __post_init__(self) -> None:
-        if self.default_backup_codex_home_paths is None:
-            self.default_backup_codex_home_paths = []
+        if self.source_roots is None:
+            self.source_roots = ["/input/codex-home", "/input/codex-backup"]
+
+    @property
+    def primary_source_root(self) -> str:
+        return (self.source_roots or ["/input/codex-home"])[0]
+
+    @property
+    def backup_source_roots(self) -> list[str]:
+        return list((self.source_roots or [])[1:])
 
 
 @dataclass
 class UserSettings:
     schema_version: int = 1
-    source_roots: list[str] | None = None
-    outputs_root: str = ""
-    redaction_profile: str = ""
-    include_archived_sources: bool | None = None
-    include_tool_outputs: bool | None = None
-    include_compaction_recovery: bool | None = None
-
-    def __post_init__(self) -> None:
-        if self.source_roots is None:
-            self.source_roots = []
+    output_root: str = ""
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "UserSettings":
         return cls(
-            schema_version=int(payload.get("schema_version") or 1),
-            source_roots=[
-                str(item).strip()
-                for item in (payload.get("source_roots") or [])
-                if str(item).strip()
-            ],
-            outputs_root=str(payload.get("outputs_root") or "").strip(),
-            redaction_profile=str(payload.get("redaction_profile") or "").strip().lower(),
-            include_archived_sources=_optional_bool(payload.get("include_archived_sources")),
-            include_tool_outputs=_optional_bool(payload.get("include_tool_outputs")),
-            include_compaction_recovery=_optional_bool(payload.get("include_compaction_recovery")),
+            schema_version=int(payload.get("schemaVersion") or 1),
+            output_root=str(payload.get("outputRoot") or "").strip(),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": self.schema_version,
-            "source_roots": list(self.source_roots or []),
-            "outputs_root": self.outputs_root,
-            "redaction_profile": self.redaction_profile,
-            "include_archived_sources": self.include_archived_sources,
-            "include_tool_outputs": self.include_tool_outputs,
-            "include_compaction_recovery": self.include_compaction_recovery,
+            "schemaVersion": self.schema_version,
+            "outputRoot": self.output_root,
         }
 
 
@@ -90,7 +70,7 @@ def load_runtime_paths() -> RuntimePaths:
     )
     outputs_root = _normalize_path(
         os.environ.get("TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT"),
-        str(appdata_root / "outputs"),
+        "/mnt/c/TimelineData/windows-codex",
     )
     runtime_defaults_path = _normalize_path(
         os.environ.get("TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS"),
@@ -148,29 +128,8 @@ def load_runtime_defaults(runtime_paths: RuntimePaths | None = None) -> RuntimeD
         if not isinstance(payload, dict):
             continue
 
-        backup_paths = [
-            str(item).strip()
-            for item in (payload.get("default_backup_codex_home_paths") or [])
-            if str(item).strip()
-        ]
-        redaction_profile = str(payload.get("default_redaction_profile") or "strict").strip().lower()
-        if redaction_profile not in {"strict", "loose"}:
-            redaction_profile = "strict"
-
         return RuntimeDefaults(
-            default_primary_codex_home_path=str(
-                payload.get("default_primary_codex_home_path") or "/input/codex-home"
-            ).strip()
-            or "/input/codex-home",
-            default_backup_codex_home_paths=backup_paths,
-            default_redaction_profile=redaction_profile,
-            default_include_archived_sources=bool(
-                payload.get("default_include_archived_sources", True)
-            ),
-            default_include_tool_outputs=bool(payload.get("default_include_tool_outputs", False)),
-            default_include_compaction_recovery=bool(
-                payload.get("default_include_compaction_recovery", False)
-            ),
+            source_roots=_parse_path_list(payload.get("sourceRoots")),
         )
 
     return RuntimeDefaults()
@@ -184,15 +143,12 @@ def _candidate_runtime_defaults_paths(configured_path: Path) -> list[Path]:
     return candidates
 
 
-def _optional_bool(value: object) -> bool | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return bool(value)
+def _parse_path_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    paths: list[str] = []
+    for item in value:
+        path = str(item or "").strip()
+        if path:
+            paths.append(path)
+    return paths

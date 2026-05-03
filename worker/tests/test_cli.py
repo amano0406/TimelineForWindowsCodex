@@ -52,80 +52,127 @@ class WorkerCliTests(unittest.TestCase):
 
     def test_items_list_cli_returns_current_and_archived_items(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
             outputs_root = Path(temp_dir) / "outputs"
+            appdata_root = temp_root / "appdata"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
             stdout, _stderr, exit_code = self._invoke_cli(
                 outputs_root,
                 "items", "list",
-                "--primary-root",
-                str(FIXTURE_CODEX_HOME),
-                "--backup-root",
-                str(ARCHIVED_FIXTURE_ROOT),
-                "--include-archived-sources",
                 "--json",
+                appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
 
             self.assertEqual(exit_code, 0)
             payload = json.loads(stdout)
-            thread_ids = {row["item_id"] for row in payload}
+            self.assertEqual(payload["sort"]["order"], "desc")
+            self.assertEqual(payload["sort"]["fields"], ["updated_at", "created_at", "thread_id"])
+            self.assertEqual(payload["item_count"], 2)
+            self.assertEqual(payload["total_items"], 2)
+            self.assertEqual(payload["pagination"]["total_items"], 2)
+            self.assertEqual(payload["pagination"]["mode"], "all")
+            self.assertEqual(payload["pagination"]["returned_items"], 2)
+            self.assertNotIn("cache", payload)
+            thread_ids = {row["item_id"] for row in payload["items"]}
             self.assertEqual(thread_ids, {FIXTURE_THREAD_ID, ARCHIVED_THREAD_ID})
 
-    def test_settings_inputs_list_and_remove_accepts_generated_input_id(self) -> None:
+    def test_items_list_paginates_latest_first(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            outputs_root = temp_root / "outputs"
+            appdata_root = temp_root / "appdata"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
+
+            first_stdout, _stderr, first_exit_code = self._invoke_cli(
+                outputs_root,
+                "items", "list",
+                "--page-size",
+                "1",
+                "--page",
+                "1",
+                "--json",
+                appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
+            )
+            self.assertEqual(first_exit_code, 0)
+            first_payload = json.loads(first_stdout)
+            self.assertEqual(first_payload["pagination"]["mode"], "page")
+            self.assertEqual(first_payload["pagination"]["returned_items"], 1)
+            self.assertTrue(first_payload["pagination"]["has_next"])
+            self.assertEqual(first_payload["items"][0]["thread_id"], FIXTURE_THREAD_ID)
+
+            second_stdout, _stderr, second_exit_code = self._invoke_cli(
+                outputs_root,
+                "items", "list",
+                "--page-size",
+                "1",
+                "--page",
+                "2",
+                "--json",
+                appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
+            )
+            self.assertEqual(second_exit_code, 0)
+            second_payload = json.loads(second_stdout)
+            self.assertEqual(second_payload["items"][0]["thread_id"], ARCHIVED_THREAD_ID)
+            self.assertFalse(second_payload["pagination"]["has_next"])
+
+    def test_items_list_all_overrides_page_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
+            stdout, _stderr, exit_code = self._invoke_cli(
+                temp_root / "outputs",
+                "items", "list",
+                "--all",
+                "--page-size",
+                "1",
+                "--json",
+                appdata_root=temp_root / "appdata",
+                runtime_defaults_path=runtime_defaults,
+            )
+
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["pagination"]["mode"], "all")
+            self.assertEqual(payload["pagination"]["returned_items"], 2)
+            self.assertEqual(len(payload["items"]), 2)
+            self.assertFalse(payload["pagination"]["has_next"])
+
+    def test_settings_status_reports_fixed_runtime_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             appdata_root = temp_root / "appdata"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
 
-            add_stdout, _stderr, add_exit_code = self._invoke_cli(
+            stdout, _stderr, exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
-                "settings",
-                "inputs",
-                "add",
-                str(FIXTURE_CODEX_HOME),
+                "settings", "status",
                 "--json",
                 appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
-            self.assertEqual(add_exit_code, 0)
-            add_payload = json.loads(add_stdout)
-            input_id = add_payload["inputs"][0]["input_id"]
 
-            list_stdout, _stderr, list_exit_code = self._invoke_cli(
-                temp_root / "ignored-outputs",
-                "settings",
-                "inputs",
-                "list",
-                "--json",
-                appdata_root=appdata_root,
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(
+                payload["sourceRoots"],
+                [str(FIXTURE_CODEX_HOME), str(ARCHIVED_FIXTURE_ROOT)],
             )
-            self.assertEqual(list_exit_code, 0)
-            list_payload = json.loads(list_stdout)
-            self.assertEqual(list_payload["inputs"][0]["input_id"], input_id)
-
-            remove_stdout, _stderr, remove_exit_code = self._invoke_cli(
-                temp_root / "ignored-outputs",
-                "settings",
-                "inputs",
-                "remove",
-                input_id,
-                "--json",
-                appdata_root=appdata_root,
-            )
-            self.assertEqual(remove_exit_code, 0)
-            remove_payload = json.loads(remove_stdout)
-            self.assertEqual(remove_payload["inputs"], [])
 
     def test_items_refresh_cli_exports_all_items_when_unfiltered(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
             outputs_root = Path(temp_dir) / "outputs"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
             stdout, _stderr, exit_code = self._invoke_cli(
                 outputs_root,
                 "items", "refresh",
-                "--primary-root",
-                str(FIXTURE_CODEX_HOME),
-                "--backup-root",
-                str(ARCHIVED_FIXTURE_ROOT),
-                "--include-archived-sources",
                 "--download-to",
                 str(Path(temp_dir) / "download"),
                 "--json",
+                runtime_defaults_path=runtime_defaults,
             )
 
             self.assertEqual(exit_code, 0)
@@ -152,25 +199,12 @@ class WorkerCliTests(unittest.TestCase):
             self.assertEqual(first_convert["thread_id"], FIXTURE_THREAD_ID)
             self.assertIn("TimelineForWindowsCodex-export-", archive_path.name)
 
-    def test_items_refresh_uses_configured_sources_and_output_root(self) -> None:
+    def test_items_refresh_uses_fixed_sources_and_configured_output_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             appdata_root = temp_root / "appdata"
             outputs_root = temp_root / "configured-outputs"
-
-            settings_stdout, _stderr, settings_exit_code = self._invoke_cli(
-                temp_root / "ignored-outputs",
-                "settings",
-                "inputs", "add",
-                str(FIXTURE_CODEX_HOME),
-                "--json",
-                appdata_root=appdata_root,
-            )
-            self.assertEqual(settings_exit_code, 0)
-            settings_payload = json.loads(settings_stdout)
-            self.assertEqual([row["path"] for row in settings_payload["inputs"]], [str(FIXTURE_CODEX_HOME.resolve())])
-            self.assertEqual(settings_payload["settings_path"], str((appdata_root / "settings.json").resolve()))
-            self.assertTrue((appdata_root / "settings.json").exists())
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME)
 
             output_stdout, _stderr, output_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
@@ -179,16 +213,18 @@ class WorkerCliTests(unittest.TestCase):
                 str(outputs_root),
                 "--json",
                 appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(output_exit_code, 0)
             output_payload = json.loads(output_stdout)
-            self.assertEqual(output_payload["master_root"], str(outputs_root.resolve()))
+            self.assertEqual(output_payload["outputRoot"], str(outputs_root.resolve()))
 
             first_stdout, _stderr, first_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
                 "items", "refresh",
                 "--json",
                 appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(first_exit_code, 0)
             first_payload = json.loads(first_stdout)
@@ -204,6 +240,7 @@ class WorkerCliTests(unittest.TestCase):
                 "items", "refresh",
                 "--json",
                 appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(second_exit_code, 0)
             second_payload = json.loads(second_stdout)
@@ -217,28 +254,29 @@ class WorkerCliTests(unittest.TestCase):
             appdata_root = temp_root / "appdata"
             outputs_root = temp_root / "configured-outputs"
             export_root = temp_root / "exported"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME)
 
             init_stdout, _stderr, init_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
                 "settings",
                 "init",
-                "--source-root",
-                str(FIXTURE_CODEX_HOME),
                 "--output-root",
                 str(outputs_root),
                 "--json",
                 appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(init_exit_code, 0)
             init_payload = json.loads(init_stdout)
-            self.assertEqual(init_payload["source_roots"], [str(FIXTURE_CODEX_HOME.resolve())])
-            self.assertEqual(init_payload["outputs_root"], str(outputs_root.resolve()))
+            self.assertEqual(init_payload["sourceRoots"], [str(FIXTURE_CODEX_HOME)])
+            self.assertEqual(init_payload["outputRoot"], str(outputs_root.resolve()))
 
             refresh_stdout, _stderr, refresh_exit_code = self._invoke_cli(
                 temp_root / "ignored-outputs",
                 "items", "refresh",
                 "--json",
                 appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(refresh_exit_code, 0)
             refresh_payload = json.loads(refresh_stdout)
@@ -251,6 +289,7 @@ class WorkerCliTests(unittest.TestCase):
                 str(export_root),
                 "--json",
                 appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(export_exit_code, 0)
             export_payload = json.loads(export_stdout)
@@ -270,6 +309,7 @@ class WorkerCliTests(unittest.TestCase):
                 str(handoff_root),
                 "--json",
                 appdata_root=appdata_root,
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(handoff_exit_code, 0)
             handoff_payload = json.loads(handoff_stdout)
@@ -279,22 +319,20 @@ class WorkerCliTests(unittest.TestCase):
 
     def test_items_refresh_and_download_support_single_and_multiple_item_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
             outputs_root = Path(temp_dir) / "outputs"
             single_download_root = Path(temp_dir) / "single-download"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
 
             single_stdout, _stderr, single_exit_code = self._invoke_cli(
                 outputs_root,
                 "items", "refresh",
-                "--primary-root",
-                str(FIXTURE_CODEX_HOME),
-                "--backup-root",
-                str(ARCHIVED_FIXTURE_ROOT),
-                "--include-archived-sources",
                 "--item-id",
                 FIXTURE_THREAD_ID,
                 "--download-to",
                 str(single_download_root),
                 "--json",
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(single_exit_code, 0)
             single_payload = json.loads(single_stdout)
@@ -310,16 +348,12 @@ class WorkerCliTests(unittest.TestCase):
             multi_stdout, _stderr, multi_exit_code = self._invoke_cli(
                 outputs_root,
                 "items", "refresh",
-                "--primary-root",
-                str(FIXTURE_CODEX_HOME),
-                "--backup-root",
-                str(ARCHIVED_FIXTURE_ROOT),
-                "--include-archived-sources",
                 "--item-id",
                 FIXTURE_THREAD_ID,
                 "--item-id",
                 ARCHIVED_THREAD_ID,
                 "--json",
+                runtime_defaults_path=runtime_defaults,
             )
             self.assertEqual(multi_exit_code, 0)
             json.loads(multi_stdout)
@@ -352,6 +386,7 @@ class WorkerCliTests(unittest.TestCase):
         *argv: str,
         appdata_root: Path | None = None,
         settings_path: Path | None = None,
+        runtime_defaults_path: Path | None = None,
     ) -> tuple[str, str, int]:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -367,10 +402,20 @@ class WorkerCliTests(unittest.TestCase):
             settings_path = outputs_root.parent / "settings.json"
         if settings_path is not None:
             env["TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH"] = str(settings_path)
+        if runtime_defaults_path is not None:
+            env["TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS"] = str(runtime_defaults_path)
         with patch.dict(os.environ, env, clear=False):
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 exit_code = main(list(argv))
         return stdout.getvalue(), stderr.getvalue(), exit_code
+
+    def _write_runtime_defaults(self, root: Path, *input_roots: Path) -> Path:
+        path = root / "runtime.defaults.json"
+        path.write_text(
+            json.dumps({"sourceRoots": [str(input_root) for input_root in input_roots]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return path
 
 
 if __name__ == "__main__":

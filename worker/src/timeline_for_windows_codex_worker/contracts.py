@@ -74,7 +74,7 @@ class RefreshRequest:
     include_archived_sources: bool = True
     include_tool_outputs: bool = False
     include_compaction_recovery: bool = False
-    redaction_profile: str = "strict"
+    redaction_profile: str = "none"
     selected_threads: list[ThreadSelection] = field(default_factory=list)
 
     @classmethod
@@ -88,7 +88,7 @@ class RefreshRequest:
             include_archived_sources=bool(payload.get("include_archived_sources", True)),
             include_tool_outputs=bool(payload.get("include_tool_outputs", False)),
             include_compaction_recovery=bool(payload.get("include_compaction_recovery", False)),
-            redaction_profile=str(payload.get("redaction_profile") or "strict"),
+            redaction_profile=str(payload.get("redaction_profile") or "none"),
             selected_threads=[
                 ThreadSelection.from_dict(item)
                 for item in payload.get("selected_threads", [])

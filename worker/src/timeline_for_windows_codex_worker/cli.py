@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
 from uuid import uuid4
 from pathlib import Path
+from typing import Any
 
 from .contracts import RefreshRequest, ThreadSelection
 from .discovery import discover_threads
@@ -17,6 +17,8 @@ from .settings import UserSettings, load_user_settings, save_user_settings, user
 
 DOCKER_RUNTIME_ENV = "TIMELINE_FOR_WINDOWS_CODEX_RUNTIME"
 ALLOW_HOST_RUN_ENV = "TIMELINE_FOR_WINDOWS_CODEX_ALLOW_HOST_RUN"
+DEFAULT_ITEMS_LIST_PAGE_SIZE = 100
+ITEMS_LIST_SORT_FIELDS = ["updated_at", "created_at", "thread_id"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,10 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     items_parser = subparsers.add_parser("items")
     items_subparsers = items_parser.add_subparsers(dest="items_command", required=True)
     items_list_parser = items_subparsers.add_parser("list")
-    _add_source_arguments(items_list_parser)
+    _add_items_list_arguments(items_list_parser)
     _add_format_argument(items_list_parser)
     items_refresh_parser = items_subparsers.add_parser("refresh")
-    _add_source_arguments(items_refresh_parser)
     _add_refresh_arguments(items_refresh_parser)
     items_refresh_parser.add_argument("--download-to")
     items_refresh_parser.add_argument("--overwrite", action="store_true")
@@ -59,25 +60,11 @@ def main(argv: list[str] | None = None) -> int:
     settings_parser = subparsers.add_parser("settings")
     settings_subparsers = settings_parser.add_subparsers(dest="settings_command", required=True)
     settings_init_parser = settings_subparsers.add_parser("init")
-    settings_init_parser.add_argument("--source-root", action="append", default=[])
     settings_init_parser.add_argument("--output-root")
     settings_init_parser.add_argument("--force", action="store_true")
     _add_format_argument(settings_init_parser)
     settings_status_parser = settings_subparsers.add_parser("status")
     _add_format_argument(settings_status_parser)
-
-    settings_inputs_parser = settings_subparsers.add_parser("inputs")
-    settings_inputs_subparsers = settings_inputs_parser.add_subparsers(dest="inputs_command", required=True)
-    settings_inputs_list_parser = settings_inputs_subparsers.add_parser("list")
-    _add_format_argument(settings_inputs_list_parser)
-    settings_inputs_add_parser = settings_inputs_subparsers.add_parser("add")
-    settings_inputs_add_parser.add_argument("path")
-    _add_format_argument(settings_inputs_add_parser)
-    settings_inputs_remove_parser = settings_inputs_subparsers.add_parser("remove")
-    settings_inputs_remove_parser.add_argument("input")
-    _add_format_argument(settings_inputs_remove_parser)
-    settings_inputs_clear_parser = settings_inputs_subparsers.add_parser("clear")
-    _add_format_argument(settings_inputs_clear_parser)
 
     settings_master_parser = settings_subparsers.add_parser("master")
     settings_master_subparsers = settings_master_parser.add_subparsers(dest="master_command", required=True)
@@ -92,14 +79,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "items":
             if args.items_command == "list":
-                return _handle_items_list(args, defaults, user_settings)
+                return _handle_items_list(args, defaults)
             if args.items_command == "refresh":
                 return _handle_refresh(
                     args,
                     outputs_root,
                     defaults,
-                    user_settings,
-                    settings_only=not _has_explicit_source_args(args),
                     download_to=args.download_to,
                     overwrite=args.overwrite,
                 )
@@ -124,82 +109,127 @@ def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--primary-root")
-    parser.add_argument("--backup-root", action="append", default=[])
-    parser.add_argument(
-        "--include-archived-sources",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-    )
-
-
 def _add_format_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--format", choices=("text", "json"), default="text")
     parser.add_argument("--json", action="store_const", const="json", dest="format")
 
 
+def _add_items_list_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--page", type=int)
+    parser.add_argument("--page-size", type=int)
+    parser.add_argument("--all", action="store_true")
+
+
 def _add_refresh_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--item-id", action="append", default=[])
-    parser.add_argument(
-        "--include-tool-outputs",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-    )
-    parser.add_argument(
-        "--include-compaction-recovery",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-    )
-    parser.add_argument("--redaction-profile", choices=("strict", "loose"))
     _add_format_argument(parser)
-
-
-def _has_explicit_source_args(args: argparse.Namespace) -> bool:
-    return bool(getattr(args, "primary_root", None) or getattr(args, "backup_root", []))
 
 
 def _handle_items_list(
     args: argparse.Namespace,
     defaults: RuntimeDefaults,
-    user_settings: UserSettings,
 ) -> int:
-    primary_root, backup_roots = _resolve_source_roots(args, defaults, user_settings)
-    discovered = discover_threads(
-        primary_root,
-        backup_roots,
-        _resolve_include_archived(args.include_archived_sources, defaults, user_settings),
-    )
-    payload = [
-        {
-            "item_id": thread.thread_id,
-            "thread_id": thread.thread_id,
-            "preferred_title": thread.preferred_title,
-            "observed_thread_names": [item.to_dict() for item in thread.observed_thread_names],
-            "source_root_path": thread.source_root_path,
-            "source_root_kind": thread.source_root_kind,
-            "session_path": thread.session_path,
-            "updated_at": thread.updated_at,
-            "cwd": thread.cwd,
-            "first_user_message_excerpt": thread.first_user_message_excerpt,
-        }
-        for thread in discovered
-    ]
-    _print_output(args.format, payload, _format_discovery_text(discovered))
+    primary_root, backup_roots = _resolve_source_roots(defaults)
+    discovered = discover_threads(primary_root, backup_roots, True)
+    all_items = _sort_item_rows([_thread_selection_to_item(thread) for thread in discovered])
+    pagination = _resolve_pagination(args, len(all_items))
+    page_items = all_items[pagination["offset"]: pagination["range_end"]]
+    payload = {
+        "schema_version": 1,
+        "state": "completed",
+        "item_count": len(all_items),
+        "total_items": len(all_items),
+        "sort": {
+            "order": "desc",
+            "fields": ITEMS_LIST_SORT_FIELDS,
+        },
+        "pagination": {
+            **pagination,
+            "returned_items": len(page_items),
+        },
+        "items": page_items,
+    }
+    _print_output(args.format, payload, _format_items_list_text(payload))
     return 0
+
+
+def _thread_selection_to_item(thread: ThreadSelection) -> dict[str, object]:
+    return {
+        "item_id": thread.thread_id,
+        "thread_id": thread.thread_id,
+        "preferred_title": thread.preferred_title,
+        "observed_thread_names": [item.to_dict() for item in thread.observed_thread_names],
+        "created_at": None,
+        "source_root_path": thread.source_root_path,
+        "source_root_kind": thread.source_root_kind,
+        "session_path": thread.session_path,
+        "updated_at": thread.updated_at,
+        "cwd": thread.cwd,
+        "first_user_message_excerpt": thread.first_user_message_excerpt,
+    }
+
+
+def _sort_item_rows(items: list[Any]) -> list[dict[str, object]]:
+    rows = [item for item in items if isinstance(item, dict)]
+    return sorted(
+        rows,
+        key=lambda item: (
+            str(item.get("updated_at") or ""),
+            str(item.get("created_at") or ""),
+            str(item.get("thread_id") or ""),
+        ),
+        reverse=True,
+    )
+
+
+def _resolve_pagination(args: argparse.Namespace, total_count: int) -> dict[str, object]:
+    if args.all or (args.page is None and args.page_size is None):
+        return {
+            "mode": "all",
+            "page": 1,
+            "page_size": total_count,
+            "total_items": total_count,
+            "total_pages": 1 if total_count else 0,
+            "offset": 0,
+            "range_start": 1 if total_count else 0,
+            "range_end": total_count,
+            "has_previous": False,
+            "has_next": False,
+        }
+
+    page = int(args.page or 1)
+    page_size = int(args.page_size or DEFAULT_ITEMS_LIST_PAGE_SIZE)
+    if page < 1:
+        raise ValueError("--page must be 1 or greater.")
+    if page_size < 1:
+        raise ValueError("--page-size must be 1 or greater.")
+
+    offset = (page - 1) * page_size
+    range_end = min(offset + page_size, total_count)
+    total_pages = (total_count + page_size - 1) // page_size if total_count else 0
+    return {
+        "mode": "page",
+        "page": page,
+        "page_size": page_size,
+        "total_items": total_count,
+        "total_pages": total_pages,
+        "offset": offset,
+        "range_start": offset + 1 if offset < total_count else 0,
+        "range_end": range_end,
+        "has_previous": page > 1 and total_count > 0,
+        "has_next": page < total_pages,
+    }
 
 
 def _handle_refresh(
     args: argparse.Namespace,
     outputs_root: Path,
     defaults: RuntimeDefaults,
-    user_settings: UserSettings,
     *,
-    settings_only: bool = True,
     download_to: str | None = None,
     overwrite: bool = False,
 ) -> int:
-    request = _prepare_refresh_request(args, outputs_root, defaults, user_settings, settings_only=settings_only)
+    request = _prepare_refresh_request(args, outputs_root, defaults)
     payload = process_refresh(request, outputs_root)
     if download_to:
         payload["download"] = build_download_archive(
@@ -216,29 +246,10 @@ def _prepare_refresh_request(
     args: argparse.Namespace,
     outputs_root: Path,
     defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-    *,
-    settings_only: bool = False,
 ) -> RefreshRequest:
-    primary_root, backup_roots = _resolve_source_roots(args, defaults, user_settings, settings_only=settings_only)
-    include_archived_sources = _resolve_include_archived(
-        args.include_archived_sources,
-        defaults,
-        user_settings,
-    )
-    include_tool_outputs = _resolve_include_tool_outputs(
-        args.include_tool_outputs,
-        defaults,
-        user_settings,
-    )
-    include_compaction_recovery = _resolve_include_compaction_recovery(
-        args.include_compaction_recovery,
-        defaults,
-        user_settings,
-    )
-    redaction_profile = _resolve_redaction_profile(args.redaction_profile, defaults, user_settings)
+    primary_root, backup_roots = _resolve_source_roots(defaults)
 
-    discovered = discover_threads(primary_root, backup_roots, include_archived_sources)
+    discovered = discover_threads(primary_root, backup_roots, True)
     selected_threads = _select_threads(discovered, _selected_item_ids(args))
     if not selected_threads:
         raise ValueError("No threads matched the current selection.")
@@ -249,10 +260,10 @@ def _prepare_refresh_request(
         created_at=now_iso(),
         primary_codex_home_path=primary_root,
         backup_codex_home_paths=backup_roots,
-        include_archived_sources=include_archived_sources,
-        include_tool_outputs=include_tool_outputs,
-        include_compaction_recovery=include_compaction_recovery,
-        redaction_profile=redaction_profile,
+        include_archived_sources=True,
+        include_tool_outputs=False,
+        include_compaction_recovery=False,
+        redaction_profile="none",
         selected_threads=selected_threads,
     )
     return request
@@ -281,52 +292,10 @@ def _handle_settings(
     if args.settings_command in {"show", "status"}:
         return _print_settings(args, runtime, user_settings)
 
-    if args.settings_command == "inputs":
-        return _handle_settings_inputs(args, runtime, user_settings)
-
     if args.settings_command == "master":
         return _handle_settings_master(args, runtime, user_settings)
 
     raise ValueError(f"Unsupported settings command: {args.settings_command}")
-
-
-def _handle_settings_inputs(
-    args: argparse.Namespace,
-    runtime,
-    user_settings: UserSettings,
-) -> int:
-    if args.inputs_command == "list":
-        return _print_settings_inputs(args, runtime, user_settings)
-
-    if args.inputs_command == "add":
-        source_path = _normalize_config_path(args.path)
-        source_roots = list(user_settings.source_roots or [])
-        if source_path not in source_roots:
-            source_roots.append(source_path)
-        user_settings.source_roots = source_roots
-        save_user_settings(user_settings, runtime)
-        return _print_settings_inputs(args, runtime, user_settings)
-
-    if args.inputs_command == "remove":
-        selector = str(args.input).strip()
-        source_roots = list(user_settings.source_roots or [])
-        remaining = [
-            item
-            for item in source_roots
-            if _source_input_id(item) != selector and _normalize_config_path(item) != _normalize_selector_path(selector)
-        ]
-        if len(remaining) == len(source_roots):
-            raise ValueError(f"Input source was not found: {selector}")
-        user_settings.source_roots = remaining
-        save_user_settings(user_settings, runtime)
-        return _print_settings_inputs(args, runtime, user_settings)
-
-    if args.inputs_command == "clear":
-        user_settings.source_roots = []
-        save_user_settings(user_settings, runtime)
-        return _print_settings_inputs(args, runtime, user_settings)
-
-    raise ValueError(f"Unsupported settings inputs command: {args.inputs_command}")
 
 
 def _handle_settings_master(
@@ -338,7 +307,7 @@ def _handle_settings_master(
         return _print_settings_master(args, runtime, user_settings)
 
     if args.master_command == "set":
-        user_settings.outputs_root = _normalize_config_path(args.path)
+        user_settings.output_root = _normalize_config_path(args.path)
         save_user_settings(user_settings, runtime)
         return _print_settings_master(args, runtime, user_settings)
 
@@ -350,27 +319,12 @@ def _handle_settings_init(
     runtime,
     user_settings: UserSettings,
 ) -> int:
-    requested_sources = [
-        _normalize_config_path(path)
-        for path in args.source_root
-        if str(path).strip()
-    ] or _default_init_source_roots()
-    existing_sources = list(user_settings.source_roots or [])
-    if args.force:
-        user_settings.source_roots = requested_sources
-    else:
-        merged_sources = list(existing_sources)
-        for source in requested_sources:
-            if source not in merged_sources:
-                merged_sources.append(source)
-        user_settings.source_roots = merged_sources
-
     output_root = _normalize_config_path(
         args.output_root
         or str(runtime.outputs_root)
     )
-    if args.force or not user_settings.outputs_root:
-        user_settings.outputs_root = output_root
+    if args.force or not user_settings.output_root:
+        user_settings.output_root = output_root
 
     save_user_settings(user_settings, runtime)
     return _print_settings(args, runtime, user_settings)
@@ -412,73 +366,58 @@ def _format_items_download_text(payload: dict[str, object]) -> str:
     )
 
 
+def _format_items_list_text(payload: dict[str, object]) -> str:
+    pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
+    sort_payload = payload.get("sort") if isinstance(payload.get("sort"), dict) else {}
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    total_items = int(pagination.get("total_items") or payload.get("total_items") or 0)
+    returned_items = int(pagination.get("returned_items") or 0)
+    start = int(pagination.get("range_start") or 0)
+    end = int(pagination.get("range_end") or 0) if returned_items else 0
+    sort_text = " ".join(
+        [
+            ",".join(str(field) for field in sort_payload.get("fields", []) if str(field).strip()),
+            str(sort_payload.get("order") or ""),
+        ]
+    ).strip()
+    lines = [
+        f"state: {payload.get('state') or ''}",
+        f"sort: {sort_text}",
+        f"items: {start}-{end} / {total_items}",
+    ]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            " | ".join(
+                [
+                    str(item.get("updated_at") or "-"),
+                    str(item.get("thread_id") or "-"),
+                    str(item.get("preferred_title") or item.get("thread_id") or "-"),
+                ]
+            )
+        )
+    return "\n".join(lines)
+
+
 def _print_settings(
     args: argparse.Namespace,
     runtime,
     user_settings: UserSettings,
 ) -> int:
     settings_path = user_settings_path(runtime)
-    effective_source_roots = _effective_source_roots_for_settings(load_runtime_defaults(runtime), user_settings)
+    effective_source_roots = _effective_source_roots_for_settings(load_runtime_defaults(runtime))
     payload = {
         "settings_path": str(settings_path),
-        "source_roots": list(user_settings.source_roots or []),
-        "effective_source_roots": effective_source_roots,
-        "outputs_root": str(_effective_outputs_root(runtime.outputs_root, user_settings)),
-        "redaction_profile": user_settings.redaction_profile or None,
-        "include_archived_sources": user_settings.include_archived_sources,
-        "include_tool_outputs": user_settings.include_tool_outputs,
-        "include_compaction_recovery": user_settings.include_compaction_recovery,
-        "using_default_source_roots": not bool(user_settings.source_roots),
+        "sourceRoots": effective_source_roots,
+        "outputRoot": str(_effective_outputs_root(runtime.outputs_root, user_settings)),
     }
     lines = [
         f"settings_path: {settings_path}",
-        f"outputs_root: {payload['outputs_root']}",
-        f"using_default_source_roots: {str(payload['using_default_source_roots']).lower()}",
-        "source_roots:",
+        f"outputRoot: {payload['outputRoot']}",
+        "sourceRoots: fixed runtime defaults; not stored in settings.json",
     ]
-    lines.extend(f"- {source}" for source in payload["source_roots"])
-    if not payload["source_roots"]:
-        lines.append("- (not configured; runtime defaults will be used)")
-        lines.append("effective_source_roots:")
-        lines.extend(f"- {source}" for source in effective_source_roots)
-    _print_output(args.format, payload, "\n".join(lines))
-    return 0
-
-
-def _print_settings_inputs(
-    args: argparse.Namespace,
-    runtime,
-    user_settings: UserSettings,
-) -> int:
-    defaults = load_runtime_defaults(runtime)
-    configured_roots = [item.strip() for item in (user_settings.source_roots or []) if item.strip()]
-    effective_roots = _effective_source_roots_for_settings(defaults, user_settings)
-    payload = {
-        "settings_path": str(user_settings_path(runtime)),
-        "configured": bool(configured_roots),
-        "inputs": _source_input_rows(configured_roots),
-        "effective_inputs": _source_input_rows(effective_roots),
-    }
-    lines = [
-        f"settings_path: {payload['settings_path']}",
-        f"configured: {str(payload['configured']).lower()}",
-        "inputs:",
-    ]
-    rows = payload["inputs"] if configured_roots else payload["effective_inputs"]
-    if configured_roots:
-        lines.extend(
-            f"- {row['input_id']} | {row['kind']} | {row['path']}"
-            for row in rows
-            if isinstance(row, dict)
-        )
-    else:
-        lines.append("- (not configured; runtime defaults will be used)")
-        lines.append("effective_inputs:")
-        lines.extend(
-            f"- {row['input_id']} | {row['kind']} | {row['path']}"
-            for row in rows
-            if isinstance(row, dict)
-        )
+    lines.extend(f"- {source}" for source in effective_source_roots)
     _print_output(args.format, payload, "\n".join(lines))
     return 0
 
@@ -491,8 +430,8 @@ def _print_settings_master(
     outputs_root = _effective_outputs_root(runtime.outputs_root, user_settings)
     payload = {
         "settings_path": str(user_settings_path(runtime)),
-        "master_root": str(outputs_root),
-        "configured": bool((user_settings.outputs_root or "").strip()),
+        "outputRoot": str(outputs_root),
+        "configured": bool((user_settings.output_root or "").strip()),
     }
     _print_output(
         args.format,
@@ -500,7 +439,7 @@ def _print_settings_master(
         "\n".join(
             [
                 f"settings_path: {payload['settings_path']}",
-                f"master_root: {payload['master_root']}",
+                f"outputRoot: {payload['outputRoot']}",
                 f"configured: {str(payload['configured']).lower()}",
             ]
         ),
@@ -508,151 +447,55 @@ def _print_settings_master(
     return 0
 
 
-def _resolve_primary_root(value: str | None, defaults: RuntimeDefaults) -> str:
-    return (value or defaults.default_primary_codex_home_path).strip()
-
-
-def _resolve_backup_roots(values: list[str], defaults: RuntimeDefaults) -> list[str]:
-    if values:
-        return [item.strip() for item in values if item.strip()]
-    return [item.strip() for item in defaults.default_backup_codex_home_paths or [] if item.strip()]
-
-
-def _resolve_source_roots(
-    args: argparse.Namespace,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-    *,
-    settings_only: bool = False,
-) -> tuple[str, list[str]]:
-    if not settings_only and (getattr(args, "primary_root", None) or getattr(args, "backup_root", [])):
-        return (
-            _resolve_primary_root(getattr(args, "primary_root", None), defaults),
-            _resolve_backup_roots(getattr(args, "backup_root", []), defaults),
-        )
-
-    configured = [item.strip() for item in (user_settings.source_roots or []) if item.strip()]
-    if configured:
-        return configured[0], configured[1:]
-
-    return defaults.default_primary_codex_home_path, [
-        item.strip() for item in defaults.default_backup_codex_home_paths or [] if item.strip()
+def _resolve_source_roots(defaults: RuntimeDefaults) -> tuple[str, list[str]]:
+    return defaults.primary_source_root, [
+        item.strip() for item in defaults.backup_source_roots or [] if item.strip()
     ]
 
 
-def _resolve_include_archived(
-    value: bool | None,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-) -> bool:
-    if value is not None:
-        return bool(value)
-    if user_settings.include_archived_sources is not None:
-        return user_settings.include_archived_sources
-    return defaults.default_include_archived_sources
-
-
-def _resolve_include_tool_outputs(
-    value: bool | None,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-) -> bool:
-    if value is not None:
-        return bool(value)
-    if user_settings.include_tool_outputs is not None:
-        return user_settings.include_tool_outputs
-    return defaults.default_include_tool_outputs
-
-
-def _resolve_include_compaction_recovery(
-    value: bool | None,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-) -> bool:
-    if value is not None:
-        return bool(value)
-    if user_settings.include_compaction_recovery is not None:
-        return user_settings.include_compaction_recovery
-    return defaults.default_include_compaction_recovery
-
-
-def _resolve_redaction_profile(
-    value: str | None,
-    defaults: RuntimeDefaults,
-    user_settings: UserSettings,
-) -> str:
-    profile = (
-        value
-        or user_settings.redaction_profile
-        or defaults.default_redaction_profile
-        or "strict"
-    ).strip().lower()
-    return "loose" if profile == "loose" else "strict"
-
-
 def _effective_outputs_root(runtime_outputs_root: Path, user_settings: UserSettings) -> Path:
-    configured = (user_settings.outputs_root or "").strip()
+    configured = (user_settings.output_root or "").strip()
     if configured:
-        return Path(configured).resolve()
+        return _config_path_to_runtime_path(configured)
     return runtime_outputs_root
 
 
 def _effective_source_roots_for_settings(
     defaults: RuntimeDefaults,
-    user_settings: UserSettings,
 ) -> list[str]:
-    configured = [item.strip() for item in (user_settings.source_roots or []) if item.strip()]
-    if configured:
-        return configured
     return [
-        defaults.default_primary_codex_home_path,
-        *[item.strip() for item in defaults.default_backup_codex_home_paths or [] if item.strip()],
+        defaults.primary_source_root,
+        *[item.strip() for item in defaults.backup_source_roots or [] if item.strip()],
     ]
-
-
-def _default_init_source_roots() -> list[str]:
-    candidates = [
-        Path("/mnt/c/Users/amano/.codex"),
-        Path("/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home"),
-    ]
-    existing = [
-        str(path.resolve())
-        for path in candidates
-        if path.exists() and path.is_dir()
-    ]
-    return existing or [str(candidates[0])]
-
-
-def _source_input_rows(source_roots: list[str]) -> list[dict[str, object]]:
-    return [
-        {
-            "input_id": _source_input_id(source),
-            "path": _normalize_config_path(source),
-            "kind": "primary" if index == 0 else "backup",
-        }
-        for index, source in enumerate(source_roots)
-    ]
-
-
-def _source_input_id(path: str) -> str:
-    normalized = _normalize_config_path(path).casefold()
-    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:8]
-    return f"input-{digest}"
-
-
-def _normalize_selector_path(value: str) -> str:
-    return _normalize_config_path(value)
 
 
 def _normalize_config_path(value: str) -> str:
-    return str(Path(value).expanduser().resolve())
+    raw = value.strip()
+    if _is_windows_drive_path(raw):
+        drive = raw[0].upper()
+        rest = raw[3:].replace("/", "\\")
+        return f"{drive}:\\{rest}"
+    return str(Path(raw).expanduser().resolve())
 
 
 def _resolve_destination_root(value: str) -> Path:
     normalized = value.strip()
     if normalized.casefold() in {"desktop", "デスクトップ"}:
         return Path("/mnt/c/Users/amano/Desktop")
-    return Path(normalized).expanduser().resolve()
+    return _config_path_to_runtime_path(normalized)
+
+
+def _config_path_to_runtime_path(value: str) -> Path:
+    raw = value.strip()
+    if _is_windows_drive_path(raw):
+        drive = raw[0].lower()
+        rest = raw[3:].replace("\\", "/")
+        return Path(f"/mnt/{drive}/{rest}").resolve()
+    return Path(raw).expanduser().resolve()
+
+
+def _is_windows_drive_path(value: str) -> bool:
+    return len(value) >= 3 and value[1] == ":" and value[2] in {"\\", "/"} and value[0].isalpha()
 
 
 def _select_threads(
@@ -693,22 +536,6 @@ def _print_output(format_name: str, payload: object, text_output: str) -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
     print(text_output)
-
-
-def _format_discovery_text(discovered: list[ThreadSelection]) -> str:
-    if not discovered:
-        return "No items discovered."
-    return "\n".join(
-        " | ".join(
-            [
-                thread.thread_id,
-                thread.preferred_title or thread.thread_id,
-                thread.updated_at or "-",
-                thread.session_path or "-",
-            ]
-        )
-        for thread in discovered
-    )
 
 
 def _create_refresh_id(outputs_root: Path) -> str:

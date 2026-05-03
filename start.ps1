@@ -22,6 +22,46 @@ function Initialize-TfwcSettingsFile {
     if (-not (Test-Path -LiteralPath $settingsPath)) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "settings.example.json") -Destination $settingsPath
     }
+
+    $outputRoot = Get-TfwcConfiguredOutputRoot
+    if ($outputRoot -and -not (Test-Path -LiteralPath $outputRoot)) {
+        New-Item -ItemType Directory -Path $outputRoot | Out-Null
+    }
+}
+
+function Get-TfwcConfiguredOutputRoot {
+    $settingsPath = Join-Path $repoRoot "settings.json"
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        return $null
+    }
+    $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+    $outputRoot = [string]$settings.outputRoot
+    if ([string]::IsNullOrWhiteSpace($outputRoot)) {
+        return $null
+    }
+    if (-not [System.IO.Path]::IsPathRooted($outputRoot)) {
+        $outputRoot = Join-Path $repoRoot $outputRoot
+    }
+    return [System.IO.Path]::GetFullPath($outputRoot)
+}
+
+function Set-TfwcDefaultEnvironmentValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    $currentValue = [Environment]::GetEnvironmentVariable($Name, "Process")
+    if ([string]::IsNullOrWhiteSpace($currentValue)) {
+        Set-Item -Path "Env:$Name" -Value $Value
+    }
+}
+
+function Initialize-TfwcDockerMountEnvironment {
+    Set-TfwcDefaultEnvironmentValue -Name "HOST_TIMELINE_DATA" -Value "C:\TimelineData"
+    Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_HOME" -Value (Join-Path $env:USERPROFILE ".codex")
+    Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_BACKUP_HOME" -Value "C:\Codex\archive\migration-backup-2026-03-27\codex-home"
+    Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_ROOT" -Value "C:\Codex"
 }
 
 function Get-TfwcLastExitCode {
@@ -34,6 +74,7 @@ function Get-TfwcLastExitCode {
 }
 
 Initialize-TfwcSettingsFile
+Initialize-TfwcDockerMountEnvironment
 $docker = Get-TfwcDockerCommand
 & $docker info *> $null
 if (-not $?) {
@@ -41,16 +82,17 @@ if (-not $?) {
 }
 
 Write-Host "Starting TimelineForWindowsCodex worker..."
+$global:LASTEXITCODE = 0
 & $docker compose up -d --build worker
-if (-not $?) { throw "docker compose failed." }
+if ((Get-TfwcLastExitCode) -ne 0) { throw "docker compose failed." }
 
 Write-Host ""
 Write-Host "TimelineForWindowsCodex worker-1 was started."
 Write-Host "CLI commands execute inside this persistent Compose service container."
 Write-Host ""
 Write-Host "CLI examples:"
-Write-Host "  .\cli.ps1 settings status"
-Write-Host "  .\cli.ps1 items list --json"
-Write-Host "  .\cli.ps1 items refresh --json"
-Write-Host "  .\cli.ps1 items download --to /shared/downloads"
+Write-Host "  .\cli.bat settings status"
+Write-Host "  .\cli.bat items list --json"
+Write-Host "  .\cli.bat items refresh --json"
+Write-Host "  .\cli.bat items download --to C:\TimelineData\windows-codex-downloads"
 exit (Get-TfwcLastExitCode)

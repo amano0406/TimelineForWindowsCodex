@@ -11,11 +11,10 @@ services:
       TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS: /app/config/runtime.defaults.json
       TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT: /shared/app-data
       TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH: /shared/app-data/settings.json
-      TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT: /shared/outputs
     volumes:
       - app-data:/shared/app-data
-      - ./outputs:/shared/outputs
       - ./downloads:/shared/downloads
+      - ${HOST_TIMELINE_DATA:-/mnt/c/TimelineData}:/mnt/c/TimelineData
       - ./settings.json:/shared/app-data/settings.json
       - ${HOST_CODEX_HOME:-/mnt/c/Users/amano/.codex}:/input/codex-home:ro
       - ${HOST_CODEX_BACKUP_HOME:-/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home}:/input/codex-backup:ro

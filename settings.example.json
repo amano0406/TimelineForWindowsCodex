@@ -1,12 +1,4 @@
 {
-  "schema_version": 1,
-  "source_roots": [
-    "/input/codex-home",
-    "/input/codex-backup"
-  ],
-  "outputs_root": "/shared/outputs",
-  "redaction_profile": "strict",
-  "include_archived_sources": true,
-  "include_tool_outputs": false,
-  "include_compaction_recovery": false
+  "schemaVersion": 1,
+  "outputRoot": "C:\\TimelineData\\windows-codex"
 }
