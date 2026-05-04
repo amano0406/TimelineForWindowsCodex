@@ -118,16 +118,13 @@ class WorkerCliTests(unittest.TestCase):
             self.assertEqual(second_payload["items"][0]["thread_id"], ARCHIVED_THREAD_ID)
             self.assertFalse(second_payload["pagination"]["has_next"])
 
-    def test_items_list_all_overrides_page_size(self) -> None:
+    def test_items_list_defaults_to_all_items(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
             stdout, _stderr, exit_code = self._invoke_cli(
                 temp_root / "outputs",
                 "items", "list",
-                "--all",
-                "--page-size",
-                "1",
                 "--json",
                 appdata_root=temp_root / "appdata",
                 runtime_defaults_path=runtime_defaults,

@@ -102,7 +102,6 @@ function Show-TfwcUsage {
     Write-Host "  .\cli.bat settings master show"
     Write-Host "  .\cli.bat items list --json"
     Write-Host "  .\cli.bat items list --page 2 --page-size 50 --json"
-    Write-Host "  .\cli.bat items list --all --json"
     Write-Host "  .\cli.bat items refresh --json"
     Write-Host "  .\cli.bat items download --to C:\TimelineData\windows-codex-downloads"
 }

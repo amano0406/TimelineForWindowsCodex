@@ -117,7 +117,6 @@ def _add_format_argument(parser: argparse.ArgumentParser) -> None:
 def _add_items_list_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--page", type=int)
     parser.add_argument("--page-size", type=int)
-    parser.add_argument("--all", action="store_true")
 
 
 def _add_refresh_arguments(parser: argparse.ArgumentParser) -> None:
@@ -183,7 +182,7 @@ def _sort_item_rows(items: list[Any]) -> list[dict[str, object]]:
 
 
 def _resolve_pagination(args: argparse.Namespace, total_count: int) -> dict[str, object]:
-    if args.all or (args.page is None and args.page_size is None):
+    if args.page is None and args.page_size is None:
         return {
             "mode": "all",
             "page": 1,

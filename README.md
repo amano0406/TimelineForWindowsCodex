@@ -157,7 +157,6 @@ Windows uses the `.bat` launcher as the stable front door. It runs the PowerShel
 
 .\cli.bat items list --json
 .\cli.bat items list --page 2 --page-size 50 --json
-.\cli.bat items list --all --json
 .\cli.bat items refresh --json
 .\cli.bat items refresh --download-to C:\TimelineData\windows-codex-downloads --json
 .\cli.bat items download --to C:\TimelineData\windows-codex-downloads
@@ -168,7 +167,6 @@ Notes:
 - `items list` is sorted by `updated_at` descending. The newest item is shown first.
 - `items list` defaults to all items.
 - Pass `--page` / `--page-size` only when you want paging. `--page-size` defaults to `100` when paging is used.
-- `--all` explicitly returns every item and takes precedence over `--page` / `--page-size`.
 - Omit `--item-id` to refresh or download all discovered items.
 - Pass `--item-id` multiple times, or pass comma-separated ids, for selected items.
 - `items refresh` updates the fixed master directory.
