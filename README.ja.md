@@ -16,6 +16,20 @@ English README: [README.md](README.md)
 - settings 管理方針: [SETTINGS_POLICY.md](SETTINGS_POLICY.md)
 - Docker 優先方針: [DOCKER_ONLY_POLICY.md](DOCKER_ONLY_POLICY.md)
 
+## Timeline 系での位置づけ
+
+`TimelineForWindowsCodex` は、Timeline 系の中では **Codex Desktop 履歴の intake / export アダプタ** です。
+
+この製品の責務は、Windows ローカルに残っている Codex のスレッド履歴を、後段の Timeline 製品や LLM が扱いやすい thread 単位の証拠データへ変換し、固定 master と ZIP として取り出せる状態にすることです。
+
+思想:
+
+- source は正本として read-only に扱う
+- 要約や解釈より、raw に近い user / assistant / system の message chain を優先する
+- グローバルな読み物化、分析、時系列ビュー化は後段へ任せる
+- この製品内では thread 単位の `timeline.json` と `convert_info.json` を安定した契約にする
+- UI ではなく CLI / Docker Compose に寄せ、ローカルで再現しやすい運用を優先する
+
 ## クイックスタート
 
 通常は repo root で以下を実行します。

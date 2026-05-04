@@ -16,6 +16,20 @@ Design decisions, progress tracking, and policy notes live in separate documents
 - Settings policy: [SETTINGS_POLICY.md](SETTINGS_POLICY.md)
 - Docker-first policy: [DOCKER_ONLY_POLICY.md](DOCKER_ONLY_POLICY.md)
 
+## Position In The Timeline Family
+
+`TimelineForWindowsCodex` is the **Codex Desktop history intake / export adapter** in the Timeline product family.
+
+Its responsibility is to read Windows-local Codex thread history, convert it into thread-scoped evidence data that downstream Timeline products or LLMs can consume, keep that data in a fixed master output root, and package selected items as ZIP files when needed.
+
+Principles:
+
+- Treat source history as the read-only source of truth.
+- Preserve raw-ish user / assistant / system message chains before summarization or interpretation.
+- Leave global readable timeline rendering, analysis, and visualization to downstream products.
+- Keep `timeline.json` and `convert_info.json` as the stable per-thread output contract.
+- Prefer local, reproducible CLI / Docker Compose operation over a Web UI.
+
 ## Quick Start
 
 Run these commands from the repository root:
