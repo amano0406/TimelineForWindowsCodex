@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "productId": "windows-codex",
+  "displayName": "TimelineForWindowsCodex",
+  "productKind": "conversation-windows-codex",
+  "description": "Converts Windows Codex Desktop history into per-thread timeline items.",
+  "commands": {
+    "start": {
+      "type": "powershell",
+      "path": "start.ps1"
+    },
+    "stop": {
+      "type": "powershell",
+      "path": "stop.ps1"
+    },
+    "cli": {
+      "type": "powershell",
+      "path": "cli.ps1"
+    }
+  },
+  "settings": {
+    "file": "settings.json",
+    "exampleFile": "settings.example.json",
+    "supportsBasicDefaults": true,
+    "supportsProductOverrides": true
+  },
+  "capabilities": {
+    "fileList": false,
+    "itemList": true,
+    "itemRefresh": true,
+    "itemDownload": true,
+    "itemRemove": false,
+    "modelList": false,
+    "verbalization": false
+  },
+  "data": {
+    "sourcePathsFromSettings": [
+      "sourceRoot",
+      "sourceRoot.path",
+      "sourceRoots[].path"
+    ],
+    "generatedPathsFromSettings": [
+      "outputRoot",
+      "outputRoot.path",
+      "masterRoot.path"
+    ],
+    "deleteSourceData": false
+  },
+  "uninstall": {
+    "deleteAppDirectory": true,
+    "backupSettingsByDefault": true,
+    "deleteGeneratedDataOptional": true,
+    "deleteGeneratedDataByDefault": false,
+    "deleteSourceData": false
+  },
+  "runtime": {
+    "usesDocker": true,
+    "dockerManagedByTimeline": false
+  }
+}
