@@ -314,6 +314,51 @@ class WorkerCliTests(unittest.TestCase):
             self.assertEqual(handoff_payload["download"]["state"], "completed")
             self.assertTrue(Path(handoff_payload["download"]["destination_path"]).exists())
 
+    def test_settings_updates_preserve_runtime_and_unknown_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            appdata_root = temp_root / "appdata"
+            settings_path = appdata_root / "settings.json"
+            configured_output = temp_root / "configured-outputs"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME)
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "outputRoot": str(configured_output),
+                        "runtime": {
+                            "instanceName": "88c7477ed0",
+                            "apiPort": 19200,
+                        },
+                        "huggingFaceToken": "secret-token",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            next_output = temp_root / "next-outputs"
+            stdout, _stderr, exit_code = self._invoke_cli(
+                temp_root / "ignored-outputs",
+                "settings",
+                "master", "set",
+                str(next_output),
+                "--json",
+                appdata_root=appdata_root,
+                settings_path=settings_path,
+                runtime_defaults_path=runtime_defaults,
+            )
+
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["outputRoot"], str(next_output.resolve()))
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(list(saved)[:3], ["schemaVersion", "runtime", "outputRoot"])
+            self.assertEqual(saved["runtime"]["instanceName"], "88c7477ed0")
+            self.assertEqual(saved["runtime"]["apiPort"], 19200)
+            self.assertEqual(saved["huggingFaceToken"], "secret-token")
+
     def test_items_refresh_and_download_support_single_and_multiple_item_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -376,6 +421,59 @@ class WorkerCliTests(unittest.TestCase):
             self.assertIn(f"items/{ARCHIVED_THREAD_ID}/timeline.json", names)
             self.assertIn(f"items/{ARCHIVED_THREAD_ID}/convert_info.json", names)
             self.assertNotIn("status.json", names)
+
+    def test_items_remove_deletes_selected_master_item_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            outputs_root = temp_root / "outputs"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
+
+            refresh_stdout, _stderr, refresh_exit_code = self._invoke_cli(
+                outputs_root,
+                "items", "refresh",
+                "--json",
+                runtime_defaults_path=runtime_defaults,
+            )
+            self.assertEqual(refresh_exit_code, 0)
+            json.loads(refresh_stdout)
+            self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "timeline.json").exists())
+            self.assertTrue((outputs_root / ARCHIVED_THREAD_ID / "timeline.json").exists())
+
+            remove_stdout, _stderr, remove_exit_code = self._invoke_cli(
+                outputs_root,
+                "items", "remove",
+                "--item-id",
+                FIXTURE_THREAD_ID,
+                "--json",
+            )
+            self.assertEqual(remove_exit_code, 0)
+            remove_payload = json.loads(remove_stdout)
+            self.assertEqual(remove_payload["state"], "completed")
+            self.assertEqual(remove_payload["removed_count"], 1)
+            self.assertEqual(remove_payload["items"][0]["thread_id"], FIXTURE_THREAD_ID)
+            self.assertFalse((outputs_root / FIXTURE_THREAD_ID).exists())
+            self.assertTrue((outputs_root / ARCHIVED_THREAD_ID / "timeline.json").exists())
+            self.assertTrue(
+                (
+                    FIXTURE_CODEX_HOME
+                    / "sessions"
+                    / "2026"
+                    / "04"
+                    / "03"
+                    / f"rollout-2026-04-03T09-12-00-{FIXTURE_THREAD_ID}.jsonl"
+                ).exists()
+            )
+
+            missing_stdout, missing_stderr, missing_exit_code = self._invoke_cli(
+                outputs_root,
+                "items", "remove",
+                "--item-id",
+                FIXTURE_THREAD_ID,
+                "--json",
+            )
+            self.assertEqual(missing_stdout, "")
+            self.assertEqual(missing_exit_code, 1)
+            self.assertIn("Unknown item ids in master", missing_stderr)
 
     def _invoke_cli(
         self,

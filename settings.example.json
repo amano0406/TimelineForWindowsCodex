@@ -1,4 +1,8 @@
 {
   "schemaVersion": 1,
+  "runtime": {
+    "instanceName": "",
+    "apiPort": 19200
+  },
   "outputRoot": "C:\\TimelineData\\windows-codex"
 }

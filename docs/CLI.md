@@ -26,6 +26,7 @@ Windows users should use `cli.bat` from the repository root. It runs the PowerSh
 .\cli.bat items refresh --json
 .\cli.bat items refresh --download-to C:\TimelineData\windows-codex-downloads --json
 .\cli.bat items download --to C:\TimelineData\windows-codex-downloads
+.\cli.bat items remove --item-id <thread_id> --json
 ```
 
 - `items list` reads the current master artifacts and returns items newest-first.
@@ -34,8 +35,9 @@ Windows users should use `cli.bat` from the repository root. It runs the PowerSh
 - `items refresh` reads the mounted Codex history and updates the configured master output root.
 - `items refresh --download-to <folder>` refreshes the master output and then creates a ZIP package.
 - `items download --to <folder>` creates a ZIP package from the current master output.
+- `items remove --item-id <id>` deletes selected generated master item directories only. It does not delete source Codex history or existing ZIP exports.
 - Omit `--item-id` to refresh or download every discovered item.
-- Pass `--item-id` multiple times, or pass comma-separated ids, for selected items.
+- Pass `--item-id` multiple times, or pass comma-separated ids, for selected refresh, download, and remove operations.
 
 ## Normal Operation
 

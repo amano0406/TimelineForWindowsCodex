@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -38,19 +38,29 @@ class RuntimeDefaults:
 class UserSettings:
     schema_version: int = 1
     output_root: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "UserSettings":
         return cls(
             schema_version=int(payload.get("schemaVersion") or 1),
             output_root=str(payload.get("outputRoot") or "").strip(),
+            extra=dict(payload),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schemaVersion": self.schema_version,
-            "outputRoot": self.output_root,
         }
+        runtime = self.extra.get("runtime")
+        if runtime is not None:
+            payload["runtime"] = runtime
+        payload["outputRoot"] = self.output_root
+        for key, value in self.extra.items():
+            if key in {"schemaVersion", "runtime", "outputRoot"}:
+                continue
+            payload[key] = value
+        return payload
 
 
 def _normalize_path(value: str | None, fallback: str) -> Path:

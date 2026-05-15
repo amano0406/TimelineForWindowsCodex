@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -221,16 +222,50 @@ def build_download_archive(
     }
 
 
+def remove_master_items(outputs_root: Path, selected_item_ids: list[str]) -> dict[str, object]:
+    if not _normalize_selected_item_ids(selected_item_ids):
+        raise ValueError("Pass at least one --item-id to remove master items.")
+
+    rows = collect_master_items(outputs_root, selected_item_ids)
+    root = outputs_root.resolve()
+    removed_rows: list[dict[str, object]] = []
+    total_messages = 0
+    total_attachments = 0
+
+    for row in rows:
+        item_dir_name = str(row["item_dir_name"])
+        item_dir = (outputs_root / item_dir_name).resolve()
+        if item_dir.parent != root:
+            raise ValueError(f"Refusing to remove item outside master root: {item_dir}")
+
+        shutil.rmtree(item_dir)
+        total_messages += int(row.get("message_count") or 0)
+        total_attachments += int(row.get("attachment_count") or 0)
+        removed_rows.append(
+            {
+                "thread_id": row.get("thread_id"),
+                "item_dir_name": item_dir_name,
+                "title": row.get("title"),
+            }
+        )
+
+    return {
+        "schema_version": 1,
+        "state": "completed",
+        "master_root": str(outputs_root),
+        "removed_count": len(removed_rows),
+        "item_count": len(removed_rows),
+        "message_count": total_messages,
+        "attachment_count": total_attachments,
+        "items": removed_rows,
+    }
+
+
 def collect_master_items(outputs_root: Path, selected_item_ids: list[str] | None = None) -> list[dict[str, object]]:
     if not outputs_root.exists():
         return []
 
-    normalized_selection = {
-        value.strip().casefold()
-        for selected_id in selected_item_ids or []
-        for value in str(selected_id).split(",")
-        if value.strip()
-    }
+    normalized_selection = _normalize_selected_item_ids(selected_item_ids)
     rows: list[dict[str, object]] = []
     for item_dir in sorted(path for path in outputs_root.iterdir() if path.is_dir()):
         convert_path = item_dir / THREAD_CONVERT_FILE_NAME
@@ -260,6 +295,15 @@ def collect_master_items(outputs_root: Path, selected_item_ids: list[str] | None
         if missing:
             raise ValueError(f"Unknown item ids in master: {', '.join(missing)}")
     return rows
+
+
+def _normalize_selected_item_ids(selected_item_ids: list[str] | None) -> set[str]:
+    return {
+        value.strip().casefold()
+        for selected_id in selected_item_ids or []
+        for value in str(selected_id).split(",")
+        if value.strip()
+    }
 
 
 def render_download_readme(rows: list[dict[str, object]]) -> str:

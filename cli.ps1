@@ -9,6 +9,8 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = $PSScriptRoot
 Set-Location $repoRoot
+$script:TfwcProductId = "timeline-for-windows-codex"
+$script:TfwcDefaultApiPort = 19200
 
 function Get-TfwcDockerCommand {
     $dockerExe = Join-Path $env:ProgramFiles "Docker\Docker\resources\bin\docker.exe"
@@ -29,6 +31,80 @@ function Get-TfwcHostSettingsPath {
         $settingsPath = Join-Path $repoRoot $settingsPath
     }
     return [System.IO.Path]::GetFullPath($settingsPath)
+}
+
+function Read-TfwcSettingsJson {
+    $settingsPath = Get-TfwcHostSettingsPath
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        return [pscustomobject]@{}
+    }
+    try {
+        $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -eq $settings) { return [pscustomobject]@{} }
+        return $settings
+    }
+    catch {
+        return [pscustomobject]@{}
+    }
+}
+
+function ConvertTo-TfwcSafeName {
+    param([string]$Value)
+
+    $text = ([string]$Value).Trim().ToLowerInvariant()
+    $text = [System.Text.RegularExpressions.Regex]::Replace($text, "[^a-z0-9-]+", "-")
+    $text = [System.Text.RegularExpressions.Regex]::Replace($text, "-{2,}", "-").Trim("-")
+    return $text
+}
+
+function Get-TfwcRuntimeSettings {
+    $settings = Read-TfwcSettingsJson
+    $runtime = if ($null -ne $settings.PSObject.Properties["runtime"] -and $null -ne $settings.runtime) {
+        $settings.runtime
+    }
+    else {
+        [pscustomobject]@{}
+    }
+
+    $instanceName = [Environment]::GetEnvironmentVariable("TIMELINE_FOR_WINDOWS_CODEX_INSTANCE_NAME", "Process")
+    if ([string]::IsNullOrWhiteSpace($instanceName) -and $null -ne $runtime.PSObject.Properties["instanceName"]) {
+        $instanceName = [string]$runtime.instanceName
+    }
+    $instanceName = ConvertTo-TfwcSafeName -Value $instanceName
+
+    $composeProject = [Environment]::GetEnvironmentVariable("COMPOSE_PROJECT_NAME", "Process")
+    if ([string]::IsNullOrWhiteSpace($composeProject) -and -not [string]::IsNullOrWhiteSpace($instanceName)) {
+        $composeProject = "$script:TfwcProductId-$instanceName"
+    }
+    $composeProject = ConvertTo-TfwcSafeName -Value $composeProject
+
+    $apiPortText = [Environment]::GetEnvironmentVariable("TIMELINE_FOR_WINDOWS_CODEX_API_PORT", "Process")
+    if ([string]::IsNullOrWhiteSpace($apiPortText) -and $null -ne $runtime.PSObject.Properties["apiPort"]) {
+        $apiPortText = [string]$runtime.apiPort
+    }
+    $apiPort = $script:TfwcDefaultApiPort
+    if (-not [int]::TryParse([string]$apiPortText, [ref]$apiPort) -or $apiPort -lt 1 -or $apiPort -gt 65535) {
+        $apiPort = $script:TfwcDefaultApiPort
+    }
+
+    return [pscustomobject]@{
+        InstanceName = $instanceName
+        ComposeProject = $composeProject
+        ApiPort = $apiPort
+    }
+}
+
+function Initialize-TfwcRuntimeEnvironment {
+    Initialize-TfwcSettingsFile
+    $runtime = Get-TfwcRuntimeSettings
+    if (-not [string]::IsNullOrWhiteSpace($runtime.InstanceName)) {
+        Set-Item -Path "Env:TIMELINE_FOR_WINDOWS_CODEX_INSTANCE_NAME" -Value $runtime.InstanceName
+    }
+    if (-not [string]::IsNullOrWhiteSpace($runtime.ComposeProject)) {
+        Set-Item -Path "Env:COMPOSE_PROJECT_NAME" -Value $runtime.ComposeProject
+    }
+    Set-Item -Path "Env:TIMELINE_FOR_WINDOWS_CODEX_API_PORT" -Value ([string]$runtime.ApiPort)
+    return $runtime
 }
 
 function Initialize-TfwcSettingsFile {
@@ -80,12 +156,18 @@ function Initialize-TfwcDockerMountEnvironment {
     Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_HOME" -Value (Join-Path $env:USERPROFILE ".codex")
     Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_BACKUP_HOME" -Value "C:\Codex\archive\migration-backup-2026-03-27\codex-home"
     Set-TfwcDefaultEnvironmentValue -Name "HOST_CODEX_ROOT" -Value "C:\Codex"
+    $outputRoot = Get-TfwcConfiguredOutputRoot
+    if ($outputRoot) {
+        Set-Item -Path "Env:HOST_TFWC_CONFIGURED_OUTPUT_ROOT" -Value $outputRoot
+        Set-Item -Path "Env:HOST_TFWC_CONFIGURED_OUTPUT_ROOT_CONTAINER" -Value (Convert-TfwcHostPathToContainerPath -HostPath $outputRoot)
+    }
 }
 
 function Get-TfwcComposeArguments {
     $arguments = [System.Collections.Generic.List[string]]::new()
     $arguments.Add("compose") | Out-Null
-    $projectName = [Environment]::GetEnvironmentVariable("COMPOSE_PROJECT_NAME", "Process")
+    $runtime = Get-TfwcRuntimeSettings
+    $projectName = $runtime.ComposeProject
     if (-not [string]::IsNullOrWhiteSpace($projectName)) {
         $arguments.Add("-p") | Out-Null
         $arguments.Add($projectName) | Out-Null
@@ -310,7 +392,7 @@ if ($null -eq $CliArgs -or $CliArgs.Count -eq 0) {
     exit 0
 }
 
-Initialize-TfwcSettingsFile
+$runtime = Initialize-TfwcRuntimeEnvironment
 Initialize-TfwcDockerMountEnvironment
 $docker = Get-TfwcDockerCommand
 $dockerInfo = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments @("info") -SuppressOutput

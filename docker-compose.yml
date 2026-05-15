@@ -1,6 +1,20 @@
 name: timeline-for-windows-codex
 
 services:
+  health:
+    image: timeline-for-windows-codex-health
+    build:
+      context: .
+      dockerfile: docker/health.Dockerfile
+    environment:
+      TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH: /shared/app-data/settings.json
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+    ports:
+      - "127.0.0.1:${TIMELINE_FOR_WINDOWS_CODEX_API_PORT:-19200}:8080"
+    volumes:
+      - ${HOST_TFWC_APP_DATA:-app-data}:/shared/app-data
+      - ${HOST_TFWC_SETTINGS_FILE:-./settings.json}:/shared/app-data/settings.json:ro
+
   worker:
     image: timeline-for-windows-codex-worker
     build:
@@ -16,6 +30,7 @@ services:
       - ${HOST_TFWC_APP_DATA:-app-data}:/shared/app-data
       - ${HOST_TFWC_DOWNLOADS:-./downloads}:/shared/downloads
       - ${HOST_TIMELINE_DATA:-/mnt/c/TimelineData}:/mnt/c/TimelineData
+      - ${HOST_TFWC_CONFIGURED_OUTPUT_ROOT:-./outputs}:${HOST_TFWC_CONFIGURED_OUTPUT_ROOT_CONTAINER:-/mnt/c/TimelineData/windows-codex}
       - ${HOST_TFWC_SETTINGS_FILE:-./settings.json}:/shared/app-data/settings.json
       - ${HOST_CODEX_HOME:-/mnt/c/Users/amano/.codex}:/input/codex-home:ro
       - ${HOST_CODEX_BACKUP_HOME:-/mnt/c/Codex/archive/migration-backup-2026-03-27/codex-home}:/input/codex-backup:ro

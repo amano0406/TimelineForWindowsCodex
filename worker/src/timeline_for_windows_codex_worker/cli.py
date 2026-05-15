@@ -11,7 +11,7 @@ from typing import Any
 from .contracts import RefreshRequest, ThreadSelection
 from .discovery import discover_threads
 from .fs_utils import now_iso
-from .processor import build_download_archive, process_refresh
+from .processor import build_download_archive, process_refresh, remove_master_items
 from .settings import RuntimeDefaults, load_runtime_defaults, load_runtime_paths
 from .settings import UserSettings, load_user_settings, save_user_settings, user_settings_path
 
@@ -56,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     items_download_parser.add_argument("--item-id", action="append", default=[])
     items_download_parser.add_argument("--overwrite", action="store_true")
     _add_format_argument(items_download_parser)
+    items_remove_parser = items_subparsers.add_parser("remove")
+    items_remove_parser.add_argument("--item-id", action="append", default=[])
+    _add_format_argument(items_remove_parser)
 
     settings_parser = subparsers.add_parser("settings")
     settings_subparsers = settings_parser.add_subparsers(dest="settings_command", required=True)
@@ -90,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if args.items_command == "download":
                 return _handle_items_download(args, outputs_root)
+            if args.items_command == "remove":
+                return _handle_items_remove(args, outputs_root)
 
         if args.command == "settings":
             return _handle_settings(args, runtime, defaults, user_settings)
@@ -279,6 +284,12 @@ def _handle_items_download(args: argparse.Namespace, outputs_root: Path) -> int:
     return 0
 
 
+def _handle_items_remove(args: argparse.Namespace, outputs_root: Path) -> int:
+    result_payload = remove_master_items(outputs_root, _selected_item_ids(args))
+    _print_output(args.format, result_payload, _format_items_remove_text(result_payload))
+    return 0
+
+
 def _handle_settings(
     args: argparse.Namespace,
     runtime,
@@ -361,6 +372,16 @@ def _format_items_download_text(payload: dict[str, object]) -> str:
             f"master_root: {payload.get('master_root') or ''}",
             f"thread_count: {payload.get('thread_count') or 0}",
             f"message_count: {payload.get('message_count') or 0}",
+        ]
+    )
+
+
+def _format_items_remove_text(payload: dict[str, object]) -> str:
+    return "\n".join(
+        [
+            f"state: {payload.get('state') or ''}",
+            f"master_root: {payload.get('master_root') or ''}",
+            f"removed_count: {payload.get('removed_count') or 0}",
         ]
     )
 
@@ -480,13 +501,15 @@ def _normalize_config_path(value: str) -> str:
 def _resolve_destination_root(value: str) -> Path:
     normalized = value.strip()
     if normalized.casefold() in {"desktop", "デスクトップ"}:
+        if os.name == "nt":
+            return Path.home() / "Desktop"
         return Path("/mnt/c/Users/amano/Desktop")
     return _config_path_to_runtime_path(normalized)
 
 
 def _config_path_to_runtime_path(value: str) -> Path:
     raw = value.strip()
-    if _is_windows_drive_path(raw):
+    if os.name != "nt" and _is_windows_drive_path(raw):
         drive = raw[0].lower()
         rest = raw[3:].replace("\\", "/")
         return Path(f"/mnt/{drive}/{rest}").resolve()

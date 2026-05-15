@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -75,6 +76,15 @@ def main(argv: list[str] | None = None) -> int:
         _assert_fixture_download_payload(download, archive_path)
         _assert_master_output(master_root)
         _assert_download_archive(archive_path)
+        remove = _json_from_stdout(
+            _run_cli(
+                powershell,
+                ["items", "remove", "--item-id", FIXTURE_THREAD_ID, "--json"],
+                mount_env,
+            ).stdout
+        )
+        _assert_fixture_remove_payload(remove)
+        _assert_master_item_removed(master_root)
         print(
             json.dumps(
                 {
@@ -82,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
                     "entrypoint": "cli.ps1",
                     "master_root": str(master_root),
                     "download_archive": str(archive_path),
+                    "removed_item": FIXTURE_THREAD_ID,
                     "fixture_threads": [FIXTURE_THREAD_ID, FIXTURE_ARCHIVED_THREAD_ID],
                 },
                 ensure_ascii=False,
@@ -125,6 +136,7 @@ def _build_smoke_mount_env(
 ) -> dict[str, str]:
     return {
         "COMPOSE_PROJECT_NAME": compose_project_name,
+        "TIMELINE_FOR_WINDOWS_CODEX_API_PORT": str(_find_free_local_port()),
         "HOST_TFWC_APP_DATA": _to_windows_path(appdata_root),
         "HOST_TFWC_SETTINGS_FILE": _to_windows_path(settings_path),
         "HOST_TFWC_DOWNLOADS": _to_windows_path(shared_downloads_root),
@@ -133,6 +145,12 @@ def _build_smoke_mount_env(
         "HOST_CODEX_BACKUP_HOME": _to_windows_path(FIXTURE_ARCHIVE_HOME),
         "HOST_CODEX_ROOT": _to_windows_path(REPO_ROOT / "tests" / "fixtures"),
     }
+
+
+def _find_free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def _write_settings(settings_path: Path, master_root: Path) -> None:
@@ -358,6 +376,27 @@ def _assert_download_archive(archive_path: Path) -> None:
             raise AssertionError(f"Download ZIP is missing required entries: {missing}")
         if any(name.endswith("/thread.json") for name in names):
             raise AssertionError("Download ZIP must not contain legacy thread.json entries.")
+
+
+def _assert_fixture_remove_payload(payload: dict[str, Any]) -> None:
+    if payload.get("state") != "completed":
+        raise AssertionError(f"Remove did not complete: {payload!r}")
+    if int(payload.get("removed_count") or 0) != 1:
+        raise AssertionError(f"Remove should delete exactly 1 fixture item: {payload!r}")
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    actual_ids = {str(item.get("thread_id") or "") for item in items if isinstance(item, dict)}
+    if actual_ids != {FIXTURE_THREAD_ID}:
+        raise AssertionError(f"Remove deleted unexpected items: {payload!r}")
+
+
+def _assert_master_item_removed(master_root: Path) -> None:
+    removed_item_dir = master_root / FIXTURE_THREAD_ID
+    if removed_item_dir.exists():
+        raise AssertionError(f"Removed master item still exists: {removed_item_dir}")
+    remaining_timeline_path = master_root / FIXTURE_ARCHIVED_THREAD_ID / "timeline.json"
+    remaining_convert_info_path = master_root / FIXTURE_ARCHIVED_THREAD_ID / "convert_info.json"
+    if not remaining_timeline_path.exists() or not remaining_convert_info_path.exists():
+        raise AssertionError("Remove should not delete non-selected master items.")
 
 
 def _assert_fixture_refresh_payload(payload: dict[str, Any]) -> None:

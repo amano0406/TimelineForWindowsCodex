@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -97,7 +98,7 @@ def _classify_tool(name: str) -> str:
 
 def normalize_local_path(raw_path: str) -> Path:
     match = _WINDOWS_PATH_RE.match(raw_path.strip())
-    if not match:
+    if not match or os.name == "nt":
         return Path(raw_path)
 
     drive = match.group("drive").lower()

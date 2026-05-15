@@ -29,6 +29,14 @@ timeline-for-windows-codex-worker-1
 
 CLI commands execute inside that existing worker service with `docker compose exec`. They should not create separate one-off `worker-run-*` containers during normal use.
 
+`start.bat` also starts a separate C# health service. It exposes only:
+
+```text
+http://localhost:<runtime.apiPort>/health
+```
+
+The response body is the JSON boolean `true` or `false`.
+
 ## Source Mounts
 
 Source Codex history is mounted read-only.
@@ -59,12 +67,20 @@ The settings file contains:
 ```json
 {
   "schemaVersion": 1,
-  "outputRoot": "C:\\TimelineData\\windows-codex"
+  "outputRoot": "C:\\TimelineData\\windows-codex",
+  "runtime": {
+    "instanceName": "",
+    "apiPort": 19200
+  }
 }
 ```
 
 - `schemaVersion` is the settings file format version.
 - `outputRoot` is the fixed master artifact directory.
+- `runtime.instanceName` optionally scopes the Docker Compose project for this product copy.
+- `runtime.apiPort` is the host port for the minimal health endpoint.
+
+Unknown settings fields are preserved when CLI settings commands update `settings.json`. This keeps product-specific secrets or tokens from being dropped by unrelated settings edits.
 
 Archive sources are always read. Tool-output logs, terminal output, and compaction recovery are not user-configurable settings. Conversation text is exported without URL/email/token redaction because this tool is intended to preserve local evidence for later LLM analysis.
 
