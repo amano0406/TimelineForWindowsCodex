@@ -16,7 +16,7 @@ WORKER_SRC = REPO_ROOT / "worker" / "src"
 if str(WORKER_SRC) not in sys.path:
     sys.path.insert(0, str(WORKER_SRC))
 
-from timeline_for_windows_codex_worker.commands import main  # noqa: E402
+from timeline_for_windows_codex_worker.operations import main  # noqa: E402
 from timeline_for_windows_codex_worker.settings import load_runtime_paths  # noqa: E402
 
 
@@ -26,14 +26,14 @@ ARCHIVED_FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "archived-root-min"
 ARCHIVED_THREAD_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 
-class WorkerCommandTests(unittest.TestCase):
+class WorkerOperationTests(unittest.TestCase):
     maxDiff = None
 
     def test_host_direct_execution_is_blocked_without_explicit_test_allow(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
         with patch.dict(os.environ, {}, clear=True), patch(
-            "timeline_for_windows_codex_worker.commands.Path.exists",
+            "timeline_for_windows_codex_worker.operations.Path.exists",
             return_value=False,
         ):
             with redirect_stdout(stdout), redirect_stderr(stderr):

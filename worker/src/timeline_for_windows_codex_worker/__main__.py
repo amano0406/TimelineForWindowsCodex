@@ -1,4 +1,4 @@
-from .commands import main
+from .operations import main
 
 
 if __name__ == "__main__":
