@@ -194,7 +194,7 @@ def build_download_archive(
 ) -> dict[str, object]:
     rows = collect_master_items(outputs_root, selected_item_ids or [])
     if not rows:
-        raise FileNotFoundError(f"No master items were found. Run items refresh first: {outputs_root}")
+        raise FileNotFoundError(f"No master items were found. Call POST /items/refresh first: {outputs_root}")
 
     ensure_dir(destination_root)
     archive_path = destination_root / f"TimelineForWindowsCodex-export-{_timestamp_for_filename()}.zip"

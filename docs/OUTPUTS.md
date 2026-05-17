@@ -155,11 +155,11 @@ Messages are sorted by timestamp, then parser sequence, then actor. The message 
 | `cache_key` | string | Stable key used to skip unchanged item generation. |
 | `redaction_note` | string | Notes the active redaction behavior. The current profile is `none` during normal refresh. |
 
-## Worker Operation JSON Responses
+## Worker API JSON Responses
 
-The worker also returns JSON payloads when `--json` is passed. These are operation responses, not stored master artifacts.
+The worker also returns JSON payloads from the local API. These are API responses, not stored master artifacts.
 
-### items list --json
+### POST /items/list
 
 ```json
 {
@@ -202,9 +202,9 @@ The worker also returns JSON payloads when `--json` is passed. These are operati
 }
 ```
 
-`items list` discovers available Codex source items. It does not read only the master output directory.
+`POST /items/list` discovers available Codex source items. It does not read only the master output directory.
 
-### items refresh --json
+### POST /items/refresh
 
 ```json
 {
@@ -249,7 +249,7 @@ The worker also returns JSON payloads when `--json` is passed. These are operati
 
 `processing_mode` is `full_rebuild` when all selected items were rendered. It is `incremental_reuse` when at least one unchanged item was reused.
 
-### items download --json
+### POST /items/download
 
 ```json
 {
@@ -275,7 +275,7 @@ The worker also returns JSON payloads when `--json` is passed. These are operati
 }
 ```
 
-### items remove --json
+### POST /items/remove
 
 ```json
 {
@@ -296,7 +296,7 @@ The worker also returns JSON payloads when `--json` is passed. These are operati
 }
 ```
 
-`items remove` deletes only `<outputRoot>/<thread_id>/`. It does not delete Codex source history and does not modify previously created ZIP exports.
+`POST /items/remove` deletes only `<outputRoot>/<thread_id>/`. It does not delete Codex source history and does not modify previously created ZIP exports.
 
 ## Known Non-Goals
 
