@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     items_parser = subparsers.add_parser("items")
-    items_subparsers = items_parser.add_subparsers(dest="items_command", required=True)
+    items_subparsers = items_parser.add_subparsers(dest="items_operation", required=True)
     items_list_parser = items_subparsers.add_parser("list")
     _add_items_list_arguments(items_list_parser)
     _add_format_argument(items_list_parser)
@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_format_argument(items_remove_parser)
 
     settings_parser = subparsers.add_parser("settings")
-    settings_subparsers = settings_parser.add_subparsers(dest="settings_command", required=True)
+    settings_subparsers = settings_parser.add_subparsers(dest="settings_operation", required=True)
     settings_init_parser = settings_subparsers.add_parser("init")
     settings_init_parser.add_argument("--output-root")
     settings_init_parser.add_argument("--force", action="store_true")
@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_format_argument(settings_status_parser)
 
     settings_master_parser = settings_subparsers.add_parser("master")
-    settings_master_subparsers = settings_master_parser.add_subparsers(dest="master_command", required=True)
+    settings_master_subparsers = settings_master_parser.add_subparsers(dest="master_operation", required=True)
     settings_master_show_parser = settings_master_subparsers.add_parser("show")
     _add_format_argument(settings_master_show_parser)
     settings_master_set_parser = settings_master_subparsers.add_parser("set")
@@ -81,9 +81,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "items":
-            if args.items_command == "list":
+            if args.items_operation == "list":
                 return _handle_items_list(args, defaults)
-            if args.items_command == "refresh":
+            if args.items_operation == "refresh":
                 return _handle_refresh(
                     args,
                     outputs_root,
@@ -91,9 +91,9 @@ def main(argv: list[str] | None = None) -> int:
                     download_to=args.download_to,
                     overwrite=args.overwrite,
                 )
-            if args.items_command == "download":
+            if args.items_operation == "download":
                 return _handle_items_download(args, outputs_root)
-            if args.items_command == "remove":
+            if args.items_operation == "remove":
                 return _handle_items_remove(args, outputs_root)
 
         if args.command == "settings":
@@ -296,16 +296,16 @@ def _handle_settings(
     defaults: RuntimeDefaults,
     user_settings: UserSettings,
 ) -> int:
-    if args.settings_command == "init":
+    if args.settings_operation == "init":
         return _handle_settings_init(args, runtime, user_settings)
 
-    if args.settings_command in {"show", "status"}:
+    if args.settings_operation in {"show", "status"}:
         return _print_settings(args, runtime, user_settings)
 
-    if args.settings_command == "master":
+    if args.settings_operation == "master":
         return _handle_settings_master(args, runtime, user_settings)
 
-    raise ValueError(f"Unsupported settings command: {args.settings_command}")
+    raise ValueError(f"Unsupported settings operation: {args.settings_operation}")
 
 
 def _handle_settings_master(
@@ -313,15 +313,15 @@ def _handle_settings_master(
     runtime,
     user_settings: UserSettings,
 ) -> int:
-    if args.master_command == "show":
+    if args.master_operation == "show":
         return _print_settings_master(args, runtime, user_settings)
 
-    if args.master_command == "set":
+    if args.master_operation == "set":
         user_settings.output_root = _normalize_config_path(args.path)
         save_user_settings(user_settings, runtime)
         return _print_settings_master(args, runtime, user_settings)
 
-    raise ValueError(f"Unsupported settings master command: {args.master_command}")
+    raise ValueError(f"Unsupported settings master operation: {args.master_operation}")
 
 
 def _handle_settings_init(

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import json
@@ -50,13 +50,13 @@ class WorkerOperationTests(unittest.TestCase):
 
         self.assertEqual(runtime.settings_path, (REPO_ROOT / "settings.json").resolve())
 
-    def test_items_list_command_returns_current_and_archived_items(self) -> None:
+    def test_items_list_operation_returns_current_and_archived_items(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             outputs_root = Path(temp_dir) / "outputs"
             appdata_root = temp_root / "appdata"
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
-            stdout, _stderr, exit_code = self._invoke_command(
+            stdout, _stderr, exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "list",
                 "--json",
@@ -84,7 +84,7 @@ class WorkerOperationTests(unittest.TestCase):
             appdata_root = temp_root / "appdata"
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
 
-            first_stdout, _stderr, first_exit_code = self._invoke_command(
+            first_stdout, _stderr, first_exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "list",
                 "--page-size",
@@ -102,7 +102,7 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertTrue(first_payload["pagination"]["has_next"])
             self.assertEqual(first_payload["items"][0]["thread_id"], FIXTURE_THREAD_ID)
 
-            second_stdout, _stderr, second_exit_code = self._invoke_command(
+            second_stdout, _stderr, second_exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "list",
                 "--page-size",
@@ -122,7 +122,7 @@ class WorkerOperationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
-            stdout, _stderr, exit_code = self._invoke_command(
+            stdout, _stderr, exit_code = self._invoke_operation(
                 temp_root / "outputs",
                 "items", "list",
                 "--json",
@@ -143,7 +143,7 @@ class WorkerOperationTests(unittest.TestCase):
             appdata_root = temp_root / "appdata"
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
 
-            stdout, _stderr, exit_code = self._invoke_command(
+            stdout, _stderr, exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "settings", "status",
                 "--json",
@@ -158,12 +158,12 @@ class WorkerOperationTests(unittest.TestCase):
                 [str(FIXTURE_CODEX_HOME), str(ARCHIVED_FIXTURE_ROOT)],
             )
 
-    def test_items_refresh_command_exports_all_items_when_unfiltered(self) -> None:
+    def test_items_refresh_operation_exports_all_items_when_unfiltered(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             outputs_root = Path(temp_dir) / "outputs"
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
-            stdout, _stderr, exit_code = self._invoke_command(
+            stdout, _stderr, exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "refresh",
                 "--download-to",
@@ -203,7 +203,7 @@ class WorkerOperationTests(unittest.TestCase):
             outputs_root = temp_root / "configured-outputs"
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME)
 
-            output_stdout, _stderr, output_exit_code = self._invoke_command(
+            output_stdout, _stderr, output_exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "settings",
                 "master", "set",
@@ -216,7 +216,7 @@ class WorkerOperationTests(unittest.TestCase):
             output_payload = json.loads(output_stdout)
             self.assertEqual(output_payload["outputRoot"], str(outputs_root.resolve()))
 
-            first_stdout, _stderr, first_exit_code = self._invoke_command(
+            first_stdout, _stderr, first_exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "items", "refresh",
                 "--json",
@@ -232,7 +232,7 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertEqual(first_payload["rendered_thread_count"], 1)
             self.assertEqual(first_payload["update_counts"]["new"], 1)
 
-            second_stdout, _stderr, second_exit_code = self._invoke_command(
+            second_stdout, _stderr, second_exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "items", "refresh",
                 "--json",
@@ -253,7 +253,7 @@ class WorkerOperationTests(unittest.TestCase):
             export_root = temp_root / "exported"
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME)
 
-            init_stdout, _stderr, init_exit_code = self._invoke_command(
+            init_stdout, _stderr, init_exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "settings",
                 "init",
@@ -268,7 +268,7 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertEqual(init_payload["sourceRoots"], [str(FIXTURE_CODEX_HOME)])
             self.assertEqual(init_payload["outputRoot"], str(outputs_root.resolve()))
 
-            refresh_stdout, _stderr, refresh_exit_code = self._invoke_command(
+            refresh_stdout, _stderr, refresh_exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "items", "refresh",
                 "--json",
@@ -279,7 +279,7 @@ class WorkerOperationTests(unittest.TestCase):
             refresh_payload = json.loads(refresh_stdout)
             self.assertEqual(refresh_payload["master_root"], str(outputs_root.resolve()))
 
-            export_stdout, _stderr, export_exit_code = self._invoke_command(
+            export_stdout, _stderr, export_exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "items", "download",
                 "--to",
@@ -298,7 +298,7 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertIn(f"items/{FIXTURE_THREAD_ID}/convert_info.json", names)
 
             handoff_root = temp_root / "handoff"
-            handoff_stdout, _stderr, handoff_exit_code = self._invoke_command(
+            handoff_stdout, _stderr, handoff_exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "items",
                 "refresh",
@@ -339,7 +339,7 @@ class WorkerOperationTests(unittest.TestCase):
             )
 
             next_output = temp_root / "next-outputs"
-            stdout, _stderr, exit_code = self._invoke_command(
+            stdout, _stderr, exit_code = self._invoke_operation(
                 temp_root / "ignored-outputs",
                 "settings",
                 "master", "set",
@@ -366,7 +366,7 @@ class WorkerOperationTests(unittest.TestCase):
             single_download_root = Path(temp_dir) / "single-download"
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
 
-            single_stdout, _stderr, single_exit_code = self._invoke_command(
+            single_stdout, _stderr, single_exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "refresh",
                 "--item-id",
@@ -387,7 +387,7 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertNotIn(f"items/{ARCHIVED_THREAD_ID}/convert_info.json", names)
             self.assertNotIn("status.json", names)
 
-            multi_stdout, _stderr, multi_exit_code = self._invoke_command(
+            multi_stdout, _stderr, multi_exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "refresh",
                 "--item-id",
@@ -400,7 +400,7 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertEqual(multi_exit_code, 0)
             json.loads(multi_stdout)
 
-            multi_download_stdout, _stderr, multi_download_exit_code = self._invoke_command(
+            multi_download_stdout, _stderr, multi_download_exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "download",
                 "--to",
@@ -428,7 +428,7 @@ class WorkerOperationTests(unittest.TestCase):
             outputs_root = temp_root / "outputs"
             runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
 
-            refresh_stdout, _stderr, refresh_exit_code = self._invoke_command(
+            refresh_stdout, _stderr, refresh_exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "refresh",
                 "--json",
@@ -439,7 +439,7 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "timeline.json").exists())
             self.assertTrue((outputs_root / ARCHIVED_THREAD_ID / "timeline.json").exists())
 
-            remove_stdout, _stderr, remove_exit_code = self._invoke_command(
+            remove_stdout, _stderr, remove_exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "remove",
                 "--item-id",
@@ -464,7 +464,7 @@ class WorkerOperationTests(unittest.TestCase):
                 ).exists()
             )
 
-            missing_stdout, missing_stderr, missing_exit_code = self._invoke_command(
+            missing_stdout, missing_stderr, missing_exit_code = self._invoke_operation(
                 outputs_root,
                 "items", "remove",
                 "--item-id",
@@ -475,7 +475,7 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertEqual(missing_exit_code, 1)
             self.assertIn("Unknown item ids in master", missing_stderr)
 
-    def _invoke_command(
+    def _invoke_operation(
         self,
         outputs_root: Path,
         *argv: str,
