@@ -72,7 +72,7 @@ items/
     timeline.json
 ```
 
-See [Outputs](docs/OUTPUTS.md) for the exact `timeline.json`, `convert_info.json`, and command JSON response structures.
+See [Outputs](docs/OUTPUTS.md) for the exact `timeline.json`, `convert_info.json`, and operation response JSON structures.
 
 ## Settings
 
@@ -164,6 +164,6 @@ docker compose config --quiet
 
 ## Detailed Docs
 
-- [Outputs](docs/OUTPUTS.md): exact `timeline.json`, `convert_info.json`, command response JSON, and download ZIP contract.
+- [Outputs](docs/OUTPUTS.md): exact `timeline.json`, `convert_info.json`, operation response JSON, and download ZIP contract.
 - [Runtime](docs/RUNTIME.md): Docker, settings, source mount, and uninstall behavior.
 - [Testing](docs/TESTING.md): validation commands and what each test checks.
