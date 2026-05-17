@@ -13,23 +13,10 @@ Use `test-operational.bat` for the normal stability check. It runs fixture-backe
 The operational suite covers:
 
 - worker-hosted local API smoke test
-- raw source to `timeline.json` / `convert_info.json` fidelity audit
 - local API smoke test against the already running worker API
-- Docker Compose refresh and download ZIP smoke test
+- worker unit tests for source parsing, refresh, download, and API handlers
 
 ## Individual Checks
-
-Raw source to timeline fidelity audit:
-
-```powershell
-python tests/smoke/run_fidelity_audit.py
-```
-
-Docker production-like smoke test:
-
-```powershell
-python tests/smoke/run_docker_compose_refresh.py
-```
 
 Unit tests:
 

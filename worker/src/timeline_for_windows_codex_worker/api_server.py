@@ -9,14 +9,13 @@ from typing import Any
 
 from .discovery import discover_threads
 from .fs_utils import now_iso
-from .operations import DEFAULT_ITEMS_LIST_PAGE_SIZE
-from .operations import _effective_outputs_root
-from .operations import _resolve_destination_root
-from .operations import _resolve_pagination
-from .operations import _resolve_source_roots
-from .operations import _select_threads
-from .operations import _sort_item_rows
-from .operations import _thread_selection_to_item
+from .api_services import effective_outputs_root
+from .api_services import resolve_destination_root
+from .api_services import resolve_pagination
+from .api_services import resolve_source_roots
+from .api_services import select_threads
+from .api_services import sort_item_rows
+from .api_services import thread_selection_to_item
 from .processor import build_download_archive
 from .processor import process_refresh
 from .processor import remove_master_items
@@ -62,7 +61,7 @@ def runtime_context() -> tuple[Any, Any, UserSettings, Path]:
     runtime = load_runtime_paths()
     defaults = load_runtime_defaults(runtime)
     user_settings = load_user_settings(runtime)
-    outputs_root = _effective_outputs_root(runtime.outputs_root, user_settings)
+    outputs_root = effective_outputs_root(runtime.outputs_root, user_settings)
     return runtime, defaults, user_settings, outputs_root
 
 
@@ -83,7 +82,7 @@ def settings_status_payload(
 ) -> dict[str, Any]:
     if runtime is None or defaults is None or user_settings is None:
         runtime, defaults, user_settings, _outputs_root = runtime_context()
-    outputs_root = _effective_outputs_root(runtime.outputs_root, user_settings)
+    outputs_root = effective_outputs_root(runtime.outputs_root, user_settings)
     source_roots = [defaults.primary_source_root, *[item for item in defaults.backup_source_roots if item]]
     return {
         "settings_path": str(user_settings_path(runtime)),
@@ -102,14 +101,14 @@ def settings_status_payload(
 
 def items_list_payload(request: dict[str, Any]) -> dict[str, Any]:
     _runtime, defaults, _user_settings, _outputs_root = runtime_context()
-    primary_root, backup_roots = _resolve_source_roots(defaults)
+    primary_root, backup_roots = resolve_source_roots(defaults)
     discovered = discover_threads(primary_root, backup_roots, True)
-    all_items = _sort_item_rows([_thread_selection_to_item(thread) for thread in discovered])
-    args = Args(
-        page=get_optional_positive_int(request, ["page"]),
-        page_size=get_optional_positive_int(request, ["pageSize", "page_size"]),
+    all_items = sort_item_rows([thread_selection_to_item(thread) for thread in discovered])
+    pagination = resolve_pagination(
+        get_optional_positive_int(request, ["page"]),
+        get_optional_positive_int(request, ["pageSize", "page_size"]),
+        len(all_items),
     )
-    pagination = _resolve_pagination(args, len(all_items))
     page_items = all_items[int(pagination["offset"]) : int(pagination["range_end"])]
     return {
         "schema_version": 1,
@@ -130,9 +129,9 @@ def items_list_payload(request: dict[str, Any]) -> dict[str, Any]:
 
 def items_refresh_payload(request: dict[str, Any]) -> dict[str, Any]:
     _runtime, defaults, _user_settings, outputs_root = runtime_context()
-    primary_root, backup_roots = _resolve_source_roots(defaults)
+    primary_root, backup_roots = resolve_source_roots(defaults)
     discovered = discover_threads(primary_root, backup_roots, True)
-    selected_threads = _select_threads(discovered, get_item_ids(request))
+    selected_threads = select_threads(discovered, get_item_ids(request))
     if not selected_threads:
         raise ValueError("No threads matched the current selection.")
     refresh_id = f"refresh-{now_iso().replace(':', '').replace('-', '')[:15]}-{os.urandom(4).hex()}"
@@ -152,7 +151,7 @@ def items_refresh_payload(request: dict[str, Any]) -> dict[str, Any]:
     if download_to:
         result["download"] = build_download_archive(
             outputs_root,
-            _resolve_destination_root(download_to),
+            resolve_destination_root(download_to),
             overwrite=get_bool_any(request, ["overwrite"], False),
             selected_item_ids=get_item_ids(request),
         )
@@ -166,7 +165,7 @@ def items_download_payload(request: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Download destination is required.")
     return build_download_archive(
         outputs_root,
-        _resolve_destination_root(destination),
+        resolve_destination_root(destination),
         overwrite=get_bool_any(request, ["overwrite"], False),
         selected_item_ids=get_item_ids(request),
     )
@@ -363,12 +362,6 @@ def convert_json_text(value: Any) -> str:
 
 def error_payload(message: str, error_type: str = "Error") -> dict[str, Any]:
     return {"ok": False, "error": {"type": error_type, "message": message}}
-
-
-class Args:
-    def __init__(self, page: int | None = None, page_size: int | None = None) -> None:
-        self.page = page
-        self.page_size = page_size
 
 
 class TimelineForWindowsCodexApiHandler(BaseHTTPRequestHandler):

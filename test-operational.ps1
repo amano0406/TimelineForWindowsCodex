@@ -125,11 +125,7 @@ try {
     }
 
     if (-not $SkipFidelityAudit) {
-        $fidelityArgs = @((Join-Path $repoRoot "tests\smoke\run_fidelity_audit.py"))
-        if ($PreserveOutput) {
-            $fidelityArgs += "--preserve-output"
-        }
-        Invoke-TfwcPython -Name "Raw source to timeline fidelity audit" -Arguments $fidelityArgs
+        Write-Warning "Fidelity audit smoke is retired because worker CLI entrypoints have been removed. Use the local API smoke and worker unit tests instead."
     }
 
     if (-not $SkipLauncherSmoke) {
@@ -137,19 +133,7 @@ try {
     }
 
     if (-not $SkipDockerSmoke) {
-        $dockerArgs = @(
-            (Join-Path $repoRoot "tests\smoke\run_docker_compose_refresh.py"),
-            "--source-root",
-            (Join-Path $repoRoot "tests\fixtures\codex-home-min"),
-            "--source-root",
-            (Join-Path $repoRoot "tests\fixtures\archived-root-min"),
-            "--runs",
-            "2"
-        )
-        if ($PreserveOutput) {
-            $dockerArgs += "--preserve-output"
-        }
-        Invoke-TfwcPython -Name "Docker Compose production-like smoke test" -Arguments $dockerArgs
+        Write-Warning "Docker Compose smoke is retired because worker CLI entrypoints have been removed. Use start.ps1 plus the local API smoke instead."
     }
 
     Write-Host ""
