@@ -42,7 +42,7 @@ class WorkerCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("Host direct execution is disabled", stderr.getvalue())
-        self.assertIn(".\\cli.ps1 settings status", stderr.getvalue())
+        self.assertIn("call the local API", stderr.getvalue())
 
     def test_runtime_paths_default_settings_path_is_repo_root(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

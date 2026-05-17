@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
             "\n".join(
                 [
                     "Host direct execution is disabled for normal operation.",
-                    "Use the repository launcher instead, for example: .\\cli.ps1 settings status",
+                    "Start the product with start.ps1 and call the local API.",
                     f"For automated tests only, set {ALLOW_HOST_RUN_ENV}=1.",
                 ]
             ),

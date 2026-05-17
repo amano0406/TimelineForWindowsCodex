@@ -8,6 +8,7 @@ $repoRoot = $PSScriptRoot
 Set-Location $repoRoot
 $script:TfwcProductId = "timeline-for-windows-codex"
 $script:TfwcDefaultApiPort = 19200
+$apiPidFile = Join-Path $repoRoot ".runtime\api.pid"
 
 function Get-TfwcDockerCommand {
     $dockerExe = Join-Path $env:ProgramFiles "Docker\Docker\resources\bin\docker.exe"
@@ -201,6 +202,25 @@ function Get-TfwcComposeArguments {
     return $arguments.ToArray()
 }
 
+function Stop-TfwcNativeApi {
+    if (-not (Test-Path -LiteralPath $apiPidFile)) {
+        return
+    }
+
+    $pidText = (Get-Content -LiteralPath $apiPidFile -Raw).Trim()
+    $pidValue = 0
+    if ([int]::TryParse($pidText, [ref]$pidValue)) {
+        $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+        if ($null -ne $process) {
+            Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Remove-Item -LiteralPath $apiPidFile -Force -ErrorAction SilentlyContinue
+}
+
+Stop-TfwcNativeApi
+
 $runtime = Initialize-TfwcRuntimeEnvironment
 $docker = Get-TfwcDockerCommand
 $dockerInfo = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments @("info") -SuppressOutput
@@ -208,5 +228,5 @@ if ($dockerInfo.ExitCode -ne 0) {
     throw "Docker Desktop is installed but the Docker engine is not ready."
 }
 
-$stopResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("stop", "worker", "health")) -WriteOutput
+$stopResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("stop", "worker")) -WriteOutput
 exit $stopResult.ExitCode

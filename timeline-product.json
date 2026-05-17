@@ -12,17 +12,23 @@
     "stop": {
       "type": "powershell",
       "path": "stop.ps1"
-    },
-    "cli": {
-      "type": "powershell",
-      "path": "cli.ps1"
     }
+  },
+  "api": {
+    "enabled": true,
+    "connectionMode": "api",
+    "healthPath": "/health",
+    "defaultHost": "localhost",
+    "defaultPort": 19200,
+    "defaultBaseUrl": "http://localhost:19200"
   },
   "settings": {
     "file": "settings.json",
     "exampleFile": "settings.example.json",
     "supportsBasicDefaults": true,
-    "supportsProductOverrides": true
+    "supportsProductOverrides": true,
+    "supportsRuntimeApi": true,
+    "supportsInstanceName": true
   },
   "capabilities": {
     "fileList": false,
@@ -55,6 +61,8 @@
   },
   "runtime": {
     "usesDocker": true,
-    "dockerManagedByTimeline": false
+    "dockerManagedByTimeline": false,
+    "hostApi": true,
+    "healthApi": true
   }
 }

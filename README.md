@@ -4,13 +4,25 @@
 
 `TimelineForWindowsCodex` converts local Windows Codex Desktop history into per-thread Timeline-ready JSON artifacts. It preserves the user / assistant / system message chain so another LLM or the downstream Timeline product can consume it.
 
-The CLI is still the primary product surface. API migration has been rolled back except for one minimal C# health endpoint:
+Timeline uses the small local C# API for product operations. Host CLI launchers are legacy maintenance tools:
 
 ```text
 GET http://localhost:<runtime.apiPort>/health
+POST http://localhost:<runtime.apiPort>/items/refresh
+POST http://localhost:<runtime.apiPort>/items/list
+POST http://localhost:<runtime.apiPort>/items/detail
+POST http://localhost:<runtime.apiPort>/items/download
+POST http://localhost:<runtime.apiPort>/items/remove
+POST http://localhost:<runtime.apiPort>/settings/status
+POST http://localhost:<runtime.apiPort>/settings/init
 ```
 
-The health endpoint returns only a JSON boolean: `true` or `false`.
+The health endpoint returns a JSON boolean: `true` or `false`. `items detail`,
+`items download`, `items remove`, `settings status`, and `settings init` are
+handled directly by the local C# API from `settings.json` and generated
+artifacts. `items list` and `items refresh` invoke the Docker worker directly
+from C# and do not call host CLI launchers, so API access does not start the Docker
+worker implicitly.
 
 ## Scope
 
@@ -89,9 +101,10 @@ Run from the repository root:
 ```powershell
 cd C:\apps\TimelineForWindowsCodex
 .\start.bat
-.\cli.bat settings status
-.\cli.bat items refresh --json
-.\cli.bat items download --to C:\apps\Timeline\data\downloads\windows-codex --json
+Invoke-RestMethod http://localhost:19200/health
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/settings/status -Body '{}' -ContentType 'application/json'
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/items/refresh -Body '{}' -ContentType 'application/json'
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/items/download -Body '{"to":"C:\\apps\\Timeline\\data\\downloads\\windows-codex"}' -ContentType 'application/json'
 ```
 
 Health check:
@@ -106,22 +119,15 @@ Stop the services:
 .\stop.bat
 ```
 
-## Common Commands
-
-Use the `.bat` launchers on Windows:
+## Common API Calls
 
 ```powershell
-.\cli.bat settings init
-.\cli.bat settings status
-.\cli.bat settings master show
-.\cli.bat settings master set C:\apps\Timeline\data\to_text\windows-codex
-
-.\cli.bat items list --json
-.\cli.bat items list --page 2 --page-size 50 --json
-.\cli.bat items refresh --json
-.\cli.bat items refresh --download-to C:\apps\Timeline\data\downloads\windows-codex --json
-.\cli.bat items download --to C:\apps\Timeline\data\downloads\windows-codex --json
-.\cli.bat items remove --item-id <thread_id> --json
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/settings/init -Body '{}' -ContentType 'application/json'
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/settings/status -Body '{}' -ContentType 'application/json'
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/items/list -Body '{"page":2,"pageSize":50}' -ContentType 'application/json'
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/items/refresh -Body '{}' -ContentType 'application/json'
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/items/download -Body '{"to":"C:\\apps\\Timeline\\data\\downloads\\windows-codex"}' -ContentType 'application/json'
+Invoke-RestMethod -Method Post -Uri http://localhost:19200/items/remove -Body '{"itemIds":["<thread_id>"]}' -ContentType 'application/json'
 ```
 
 ## Testing
@@ -137,7 +143,7 @@ The operational suite uses fixture Codex homes under:
 - `tests/fixtures/codex-home-min`
 - `tests/fixtures/archived-root-min`
 
-It covers CLI refresh/download, source-to-output fidelity, Windows launcher flow, Docker Compose refresh reuse, and `items remove` against temporary fixture output.
+It covers API refresh/download, source-to-output fidelity, Windows launcher flow, Docker Compose refresh reuse, and `items remove` against temporary fixture output.
 
 Additional direct checks:
 
@@ -149,15 +155,15 @@ docker compose config --quiet
 
 ## Known Current Limits
 
-- Full API migration is intentionally not active. Only `/health` exists.
-- `cli.ps1` / `cli.bat` are still required for normal operation.
+- `items detail`, `items download`, `items remove`, `settings status`, and
+  `settings init` are now local API operations over settings/generated artifacts.
+  `items list` and `items refresh` call the Docker worker directly from C#.
 - `items list` can be slow on large real Codex history because discovery still scans source history before pagination is applied.
 - Binary attachment contents are not exported.
 - Tool-call details, terminal output, and reasoning summaries are not exported into `timeline.json`.
 
 ## Detailed Docs
 
-- [CLI](docs/CLI.md): command details beyond the common commands above.
 - [Outputs](docs/OUTPUTS.md): exact `timeline.json`, `convert_info.json`, command response JSON, and download ZIP contract.
 - [Runtime](docs/RUNTIME.md): Docker, settings, source mount, and uninstall behavior.
 - [Testing](docs/TESTING.md): validation commands and what each test checks.

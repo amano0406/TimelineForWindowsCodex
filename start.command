@@ -33,10 +33,10 @@ fi
 
 echo
 echo "TimelineForWindowsCodex worker-1 was started."
-echo "CLI commands execute inside this persistent Compose service container."
+echo "Timeline integration uses the local API started by start.ps1 on Windows."
 echo
-echo "CLI examples:"
-echo "  ./cli.command settings status"
-echo "  ./cli.command items list --json"
-echo "  ./cli.command items refresh --json"
-echo "  ./cli.command items download --to C:\\TimelineData\\windows-codex-downloads"
+echo "API examples:"
+echo "  POST http://localhost:19200/settings/status"
+echo "  POST http://localhost:19200/items/list"
+echo "  POST http://localhost:19200/items/refresh"
+echo "  POST http://localhost:19200/items/download"

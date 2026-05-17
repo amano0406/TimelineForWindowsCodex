@@ -14,8 +14,8 @@ The normal user path is:
 
 ```powershell
 .\start.bat
-.\cli.bat settings status
-.\cli.bat items refresh --json
+Invoke-RestMethod http://127.0.0.1:19200/health
+Invoke-RestMethod http://127.0.0.1:19200/items/list -Method Post -Body "{}" -ContentType "application/json"
 .\stop.bat
 ```
 
@@ -29,13 +29,24 @@ timeline-for-windows-codex-worker-1
 
 CLI commands execute inside that existing worker service with `docker compose exec`. They should not create separate one-off `worker-run-*` containers during normal use.
 
-`start.bat` also starts a separate C# health service. It exposes only:
+`start.bat` also starts a small native C# API on the Windows host. It exposes:
 
 ```text
 http://localhost:<runtime.apiPort>/health
+http://localhost:<runtime.apiPort>/items/refresh
+http://localhost:<runtime.apiPort>/items/list
+http://localhost:<runtime.apiPort>/items/detail
+http://localhost:<runtime.apiPort>/items/download
+http://localhost:<runtime.apiPort>/items/remove
+http://localhost:<runtime.apiPort>/settings/status
+http://localhost:<runtime.apiPort>/settings/init
 ```
 
-The response body is the JSON boolean `true` or `false`.
+The health response body is the JSON boolean `true` or `false`. `items detail`,
+`items download`, `items remove`, `settings status`, and `settings init` are
+handled directly by the local C# API from `settings.json` and generated
+artifacts. `items list` and `items refresh` invoke the Docker worker directly
+from C# with Docker auto-start disabled.
 
 ## Source Mounts
 
@@ -78,7 +89,7 @@ The settings file contains:
 - `schemaVersion` is the settings file format version.
 - `outputRoot` is the fixed master artifact directory.
 - `runtime.instanceName` optionally scopes the Docker Compose project for this product copy.
-- `runtime.apiPort` is the host port for the minimal health endpoint.
+- `runtime.apiPort` is the host port for the local API.
 
 Unknown settings fields are preserved when CLI settings commands update `settings.json`. This keeps product-specific secrets or tokens from being dropped by unrelated settings edits.
 

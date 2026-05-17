@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipCliSmoke,
+    [Alias("SkipCliSmoke")]
+    [switch]$SkipApiSmoke,
     [switch]$SkipFidelityAudit,
     [switch]$SkipLauncherSmoke,
     [switch]$SkipDockerSmoke,
@@ -77,16 +78,50 @@ function Restore-TfwcEnvironment {
     }
 }
 
+function Invoke-TfwcApiSmoke {
+    $manifestPath = Join-Path $repoRoot "timeline-product.json"
+    $baseUrl = "http://127.0.0.1:19200"
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        try {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($manifest.api.defaultBaseUrl) {
+                $baseUrl = ([string]$manifest.api.defaultBaseUrl).TrimEnd("/")
+            }
+        }
+        catch {
+        }
+    }
+
+    Write-Host ""
+    Write-Host "== local API smoke test =="
+    $health = Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 -Uri "$baseUrl/health"
+    if ($health.StatusCode -lt 200 -or $health.StatusCode -ge 300) {
+        throw "Health endpoint returned HTTP $($health.StatusCode)."
+    }
+    if (([string]$health.Content).Trim() -eq "false") {
+        throw "Health endpoint returned false."
+    }
+
+    $emptyBody = "{}"
+    $settings = Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Uri "$baseUrl/settings/status" -Method Post -ContentType "application/json" -Body $emptyBody
+    if ($null -eq $settings) {
+        throw "settings/status returned no payload."
+    }
+
+    $items = Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Uri "$baseUrl/items/list" -Method Post -ContentType "application/json" -Body '{"page":1,"pageSize":1}'
+    if ($null -eq $items) {
+        throw "items/list returned no payload."
+    }
+}
+
 $script:PythonInvocation = Get-TfwcPythonInvocation
 $script:PreviousEnvironment = @{}
 
 try {
     Set-TfwcTempEnvironment -Name "PYTHONDONTWRITEBYTECODE" -Value "1"
 
-    if (-not $SkipCliSmoke) {
-        Invoke-TfwcPython -Name "cli.ps1 download smoke test" -Arguments @(
-            (Join-Path $repoRoot "tests\smoke\run_cli_ps1_download.py")
-        )
+    if (-not $SkipApiSmoke) {
+        Invoke-TfwcApiSmoke
     }
 
     if (-not $SkipFidelityAudit) {
@@ -98,11 +133,7 @@ try {
     }
 
     if (-not $SkipLauncherSmoke) {
-        $launcherArgs = @((Join-Path $repoRoot "tests\smoke\run_windows_launcher_flow.py"))
-        if ($PreserveOutput) {
-            $launcherArgs += "--preserve-output"
-        }
-        Invoke-TfwcPython -Name "Windows launcher operational smoke test" -Arguments $launcherArgs
+        Write-Warning "Launcher smoke is retired because host CLI launchers have been removed. start.bat and stop.bat are covered by manual product startup checks."
     }
 
     if (-not $SkipDockerSmoke) {

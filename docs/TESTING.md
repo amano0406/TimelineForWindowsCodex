@@ -12,29 +12,17 @@ Use `test-operational.bat` for the normal stability check. It runs fixture-backe
 
 The operational suite covers:
 
-- local `cli.ps1` refresh and download through Docker Compose
+- local API smoke test
 - raw source to `timeline.json` / `convert_info.json` fidelity audit
-- Windows launcher flow through `start.bat`, `cli.bat`, and `stop.bat`
+- local API smoke test against the already running API
 - Docker Compose refresh and download ZIP smoke test
 
 ## Individual Checks
-
-Local `cli.ps1` download smoke test:
-
-```powershell
-python tests/smoke/run_cli_ps1_download.py
-```
 
 Raw source to timeline fidelity audit:
 
 ```powershell
 python tests/smoke/run_fidelity_audit.py
-```
-
-Windows launcher operational smoke test:
-
-```powershell
-python tests/smoke/run_windows_launcher_flow.py
 ```
 
 Docker production-like smoke test:
