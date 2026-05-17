@@ -125,7 +125,7 @@ try {
     }
 
     if (-not $SkipFidelityAudit) {
-        Write-Warning "Fidelity audit smoke is retired because worker CLI entrypoints have been removed. Use the local API smoke and worker unit tests instead."
+        Write-Warning "Fidelity audit smoke is retired. Use the local API smoke and worker unit tests instead."
     }
 
     if (-not $SkipLauncherSmoke) {
@@ -133,7 +133,7 @@ try {
     }
 
     if (-not $SkipDockerSmoke) {
-        Write-Warning "Docker Compose smoke is retired because worker CLI entrypoints have been removed. Use start.ps1 plus the local API smoke instead."
+        Write-Warning "Docker Compose smoke is retired. Use start.ps1 plus the local API smoke instead."
     }
 
     Write-Host ""
