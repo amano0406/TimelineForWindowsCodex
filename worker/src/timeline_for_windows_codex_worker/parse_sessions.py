@@ -350,7 +350,7 @@ def _parse_session_jsonl_events(
                 "phase": "meta",
                 "cwd": cwd,
                 "text": sanitize_text(
-                    f"cwd={payload.get('cwd') or ''} cli={payload.get('cli_version') or ''} source={payload.get('source') or ''}",
+                    f"cwd={payload.get('cwd') or ''} codex_runtime={payload.get('cli_version') or ''} source={payload.get('source') or ''}",
                     profile=redaction_profile,
                     max_length=400,
                 ),
@@ -842,7 +842,7 @@ def _parse_thread_read_events(
                 " ".join(
                     [
                         f"cwd={thread_payload.get('cwd') or ''}",
-                        f"cli={thread_payload.get('cliVersion') or ''}",
+                        f"codex_runtime={thread_payload.get('cliVersion') or ''}",
                         f"source={thread_payload.get('source') or ''}",
                         f"path={thread_payload.get('path') or ''}",
                     ]
