@@ -27,7 +27,7 @@ Docker Compose keeps one project service container:
 timeline-for-windows-codex-worker-1
 ```
 
-CLI commands execute inside that existing worker service with `docker compose exec`. They should not create separate one-off `worker-run-*` containers during normal use.
+Worker commands execute inside that existing worker service with `docker compose exec`. They should not create separate one-off `worker-run-*` containers during normal use.
 
 `start.bat` also starts a small native C# API on the Windows host. It exposes:
 
@@ -91,7 +91,7 @@ The settings file contains:
 - `runtime.instanceName` optionally scopes the Docker Compose project for this product copy.
 - `runtime.apiPort` is the host port for the local API.
 
-Unknown settings fields are preserved when CLI settings commands update `settings.json`. This keeps product-specific secrets or tokens from being dropped by unrelated settings edits.
+Unknown settings fields are preserved when settings commands update `settings.json`. This keeps product-specific secrets or tokens from being dropped by unrelated settings edits.
 
 Archive sources are always read. Tool-output logs, terminal output, and compaction recovery are not user-configurable settings. Conversation text is exported without URL/email/token redaction because this tool is intended to preserve local evidence for later LLM analysis.
 

@@ -155,9 +155,9 @@ Messages are sorted by timestamp, then parser sequence, then actor. The message 
 | `cache_key` | string | Stable key used to skip unchanged item generation. |
 | `redaction_note` | string | Notes the active redaction behavior. The current profile is `none` during normal refresh. |
 
-## CLI JSON Responses
+## Worker Command JSON Responses
 
-The CLI also returns JSON payloads when `--json` is passed. These are command responses, not stored master artifacts.
+The worker also returns JSON payloads when `--json` is passed. These are command responses, not stored master artifacts.
 
 ### items list --json
 

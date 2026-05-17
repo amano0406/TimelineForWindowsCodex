@@ -4,7 +4,7 @@
 
 `TimelineForWindowsCodex` converts local Windows Codex Desktop history into per-thread Timeline-ready JSON artifacts. It preserves the user / assistant / system message chain so another LLM or the downstream Timeline product can consume it.
 
-Timeline uses the small local C# API for product operations. Host CLI launchers are legacy maintenance tools:
+Timeline uses the small local C# API for product operations:
 
 ```text
 GET http://localhost:<runtime.apiPort>/health
@@ -21,7 +21,7 @@ The health endpoint returns a JSON boolean: `true` or `false`. `items detail`,
 `items download`, `items remove`, `settings status`, and `settings init` are
 handled directly by the local C# API from `settings.json` and generated
 artifacts. `items list` and `items refresh` invoke the Docker worker directly
-from C# and do not call host CLI launchers, so API access does not start the Docker
+from C#, so API access does not start the Docker
 worker implicitly.
 
 ## Scope
@@ -72,7 +72,7 @@ items/
     timeline.json
 ```
 
-See [Outputs](docs/OUTPUTS.md) for the exact `timeline.json`, `convert_info.json`, and CLI JSON response structures.
+See [Outputs](docs/OUTPUTS.md) for the exact `timeline.json`, `convert_info.json`, and command JSON response structures.
 
 ## Settings
 

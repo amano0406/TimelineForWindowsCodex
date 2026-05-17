@@ -133,7 +133,7 @@ try {
     }
 
     if (-not $SkipLauncherSmoke) {
-        Write-Warning "Launcher smoke is retired because host CLI launchers have been removed. start.bat and stop.bat are covered by manual product startup checks."
+        Write-Warning "Launcher smoke is retired because host launchers have been removed. start.bat and stop.bat are covered by manual product startup checks."
     }
 
     if (-not $SkipDockerSmoke) {
