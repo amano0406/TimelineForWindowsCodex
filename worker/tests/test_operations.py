@@ -16,6 +16,7 @@ WORKER_SRC = REPO_ROOT / "worker" / "src"
 if str(WORKER_SRC) not in sys.path:
     sys.path.insert(0, str(WORKER_SRC))
 
+from timeline_for_windows_codex_worker.api_server import handle_request  # noqa: E402
 from timeline_for_windows_codex_worker.operations import main  # noqa: E402
 from timeline_for_windows_codex_worker.settings import load_runtime_paths  # noqa: E402
 
@@ -474,6 +475,84 @@ class WorkerOperationTests(unittest.TestCase):
             self.assertEqual(missing_stdout, "")
             self.assertEqual(missing_exit_code, 1)
             self.assertIn("Unknown item ids in master", missing_stderr)
+
+    def test_worker_api_handles_settings_items_detail_download_and_remove(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            appdata_root = temp_root / "appdata"
+            outputs_root = temp_root / "api-outputs"
+            download_root = temp_root / "api-download"
+            runtime_defaults = self._write_runtime_defaults(temp_root, FIXTURE_CODEX_HOME, ARCHIVED_FIXTURE_ROOT)
+
+            env = {
+                "TIMELINE_FOR_WINDOWS_CODEX_OUTPUTS_ROOT": str(temp_root / "ignored-outputs"),
+                "TIMELINE_FOR_WINDOWS_CODEX_APPDATA_ROOT": str(appdata_root),
+                "TIMELINE_FOR_WINDOWS_CODEX_SETTINGS_PATH": str(appdata_root / "settings.json"),
+                "TIMELINE_FOR_WINDOWS_CODEX_RUNTIME_DEFAULTS": str(runtime_defaults),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                health_status, health_payload = handle_request("GET", "/health", None)
+                self.assertEqual(health_status, 200)
+                self.assertTrue(health_payload)
+
+                init_status, init_payload = handle_request(
+                    "POST",
+                    "/settings/init",
+                    {"outputRoot": str(outputs_root)},
+                )
+                self.assertEqual(init_status, 200)
+                self.assertEqual(init_payload["outputRoot"], str(outputs_root.resolve()))
+                self.assertEqual(init_payload["sourceRoots"], [str(FIXTURE_CODEX_HOME), str(ARCHIVED_FIXTURE_ROOT)])
+
+                list_status, list_payload = handle_request(
+                    "POST",
+                    "/items/list",
+                    {"pageSize": 1, "page": 1},
+                )
+                self.assertEqual(list_status, 200)
+                self.assertEqual(list_payload["pagination"]["mode"], "page")
+                self.assertEqual(list_payload["pagination"]["returned_items"], 1)
+
+                refresh_status, refresh_payload = handle_request(
+                    "POST",
+                    "/items/refresh",
+                    {
+                        "itemIds": [FIXTURE_THREAD_ID],
+                        "downloadTo": str(download_root),
+                    },
+                )
+                self.assertEqual(refresh_status, 200)
+                self.assertEqual(refresh_payload["state"], "completed")
+                self.assertEqual(refresh_payload["master_root"], str(outputs_root.resolve()))
+                self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "timeline.json").exists())
+                self.assertTrue(Path(refresh_payload["download"]["destination_path"]).exists())
+
+                detail_status, detail_payload = handle_request(
+                    "POST",
+                    "/items/detail",
+                    {"itemId": FIXTURE_THREAD_ID},
+                )
+                self.assertEqual(detail_status, 200)
+                self.assertTrue(detail_payload["available"])
+                self.assertEqual(detail_payload["itemId"], FIXTURE_THREAD_ID)
+                self.assertGreater(detail_payload["messageCount"], 0)
+
+                download_status, download_payload = handle_request(
+                    "POST",
+                    "/items/download",
+                    {"itemIds": [FIXTURE_THREAD_ID], "to": str(temp_root / "manual-download")},
+                )
+                self.assertEqual(download_status, 200)
+                self.assertTrue(Path(download_payload["destination_path"]).exists())
+
+                remove_status, remove_payload = handle_request(
+                    "POST",
+                    "/items/remove",
+                    {"itemIds": [FIXTURE_THREAD_ID]},
+                )
+                self.assertEqual(remove_status, 200)
+                self.assertEqual(remove_payload["removed_count"], 1)
+                self.assertFalse((outputs_root / FIXTURE_THREAD_ID).exists())
 
     def _invoke_operation(
         self,

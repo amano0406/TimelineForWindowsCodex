@@ -29,7 +29,8 @@ timeline-for-windows-codex-worker-1
 
 Worker operations run inside that existing worker service. They should not create separate one-off `worker-run-*` containers during normal use.
 
-`start.bat` also starts a small native C# API on the Windows host. It exposes:
+The worker service also hosts the product API. `start.bat` starts the worker
+container and publishes:
 
 ```text
 http://localhost:<runtime.apiPort>/health
@@ -42,11 +43,10 @@ http://localhost:<runtime.apiPort>/settings/status
 http://localhost:<runtime.apiPort>/settings/init
 ```
 
-The health response body is the JSON boolean `true` or `false`. `items detail`,
-`items download`, `items remove`, `settings status`, and `settings init` are
-handled directly by the local C# API from `settings.json` and generated
-artifacts. `items list` and `items refresh` invoke the Docker worker directly
-from C# with Docker auto-start disabled.
+The health response body is the JSON boolean `true` or `false`. All product
+operations are handled by the resident worker API. API access does not start
+processing implicitly; processing starts only when an operation endpoint such as
+`items refresh` is called.
 
 ## Source Mounts
 

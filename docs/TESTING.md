@@ -12,9 +12,9 @@ Use `test-operational.bat` for the normal stability check. It runs fixture-backe
 
 The operational suite covers:
 
-- local API smoke test
+- worker-hosted local API smoke test
 - raw source to `timeline.json` / `convert_info.json` fidelity audit
-- local API smoke test against the already running API
+- local API smoke test against the already running worker API
 - Docker Compose refresh and download ZIP smoke test
 
 ## Individual Checks

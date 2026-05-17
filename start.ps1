@@ -12,8 +12,6 @@ Set-Location $repoRoot
 $script:TfwcProductId = "timeline-for-windows-codex"
 $script:TfwcDefaultApiPort = 19200
 $runtimeDir = Join-Path $repoRoot ".runtime"
-$apiPidFile = Join-Path $runtimeDir "api.pid"
-$apiProject = Join-Path $repoRoot "api\TimelineForWindowsCodex.HealthApi\TimelineForWindowsCodex.HealthApi.csproj"
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 if ($Port -gt 0) {
     $env:TIMELINE_FOR_WINDOWS_CODEX_API_PORT = [string]$Port
@@ -281,107 +279,6 @@ function Invoke-TfwcHiddenProcess {
     }
 }
 
-function Test-TfwcApiCommandLine {
-    param([string]$CommandLine)
-
-    if (-not $CommandLine) {
-        return $false
-    }
-
-    $escapedRepoRoot = [regex]::Escape($repoRoot)
-    return (
-        ($CommandLine -match "TimelineForWindowsCodex\.HealthApi(\.csproj|\.dll|\.exe)?") -and
-        ($CommandLine -match $escapedRepoRoot)
-    )
-}
-
-function Get-TfwcApiProcess {
-    try {
-        $matches = @(
-            Get-CimInstance Win32_Process -ErrorAction Stop |
-                Where-Object { Test-TfwcApiCommandLine -CommandLine ([string]$_.CommandLine) }
-        )
-    }
-    catch {
-        return $null
-    }
-
-    if ($matches.Count -eq 0) {
-        return $null
-    }
-
-    $projectHost = @($matches | Where-Object { [string]$_.CommandLine -match "TimelineForWindowsCodex\.HealthApi\.csproj" } | Select-Object -First 1)
-    if ($projectHost.Count -gt 0) {
-        return $projectHost[0]
-    }
-
-    return ($matches | Select-Object -First 1)
-}
-
-function Start-TfwcNativeApi {
-    param(
-        [int]$ApiPort,
-        [switch]$RunInForeground
-    )
-
-    if (-not (Test-Path -LiteralPath $apiProject -PathType Leaf)) {
-        throw "TimelineForWindowsCodex API project was not found: $apiProject"
-    }
-
-    if (Test-Path -LiteralPath $apiPidFile) {
-        $existingPidText = (Get-Content -LiteralPath $apiPidFile -Raw).Trim()
-        $existingPid = 0
-        if ([int]::TryParse($existingPidText, [ref]$existingPid)) {
-            $existing = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
-            if ($null -ne $existing) {
-                $commandLine = ""
-                try {
-                    $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $existingPid"
-                    if ($null -ne $cim) {
-                        $commandLine = [string]$cim.CommandLine
-                    }
-                }
-                catch {
-                    $commandLine = ""
-                }
-                if (Test-TfwcApiCommandLine -CommandLine $commandLine) {
-                    Write-Host "TimelineForWindowsCodex API is already running. pid=$existingPid"
-                    return
-                }
-            }
-        }
-        Remove-Item -LiteralPath $apiPidFile -Force
-    }
-
-    $running = Get-TfwcApiProcess
-    if ($null -ne $running) {
-        Set-Content -LiteralPath $apiPidFile -Value ([string]$running.ProcessId) -Encoding ASCII
-        Write-Host "TimelineForWindowsCodex API is already running. pid=$($running.ProcessId)"
-        return
-    }
-
-    $apiArgs = @(
-        "run",
-        "--project",
-        $apiProject,
-        "--no-launch-profile",
-        "--",
-        "--product-root",
-        $repoRoot,
-        "--port",
-        [string]$ApiPort
-    )
-
-    if ($RunInForeground) {
-        & dotnet @apiArgs
-        exit $LASTEXITCODE
-    }
-
-    $process = Start-Process -FilePath "dotnet" -ArgumentList $apiArgs -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru
-    Set-Content -LiteralPath $apiPidFile -Value ([string]$process.Id) -Encoding ASCII
-    Write-Host "TimelineForWindowsCodex API started. pid=$($process.Id)"
-}
-
 $runtime = Initialize-TfwcRuntimeEnvironment
 Initialize-TfwcDockerMountEnvironment
 $docker = Get-TfwcDockerCommand
@@ -393,13 +290,12 @@ if ($dockerInfo.ExitCode -ne 0) {
 Write-Host "Starting TimelineForWindowsCodex worker..."
 Write-Host "API: http://localhost:$($runtime.ApiPort)/health"
 $global:LASTEXITCODE = 0
-$startResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("up", "-d", "--build", "worker")) -WriteOutput
+$startResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("up", "-d", "--build", "--remove-orphans", "worker")) -WriteOutput
 if ($startResult.ExitCode -ne 0) { throw "docker compose failed." }
 
-Start-TfwcNativeApi -ApiPort ([int]$runtime.ApiPort) -RunInForeground:$Foreground
-
 Write-Host ""
-Write-Host "TimelineForWindowsCodex worker and API are running."
+Write-Host "TimelineForWindowsCodex worker API is running in the worker container."
+Write-Host "Processing does not start automatically. Call the local API when processing is needed."
 Write-Host "API: http://localhost:$($runtime.ApiPort)/health"
 Write-Host ""
 Write-Host "API examples:"
@@ -407,4 +303,19 @@ Write-Host "  curl.exe http://localhost:$($runtime.ApiPort)/health"
 Write-Host "  Invoke-RestMethod -Method Post -Uri http://localhost:$($runtime.ApiPort)/settings/status -Body '{}'"
 Write-Host "  Invoke-RestMethod -Method Post -Uri http://localhost:$($runtime.ApiPort)/items/list -Body '{}'"
 Write-Host "  Invoke-RestMethod -Method Post -Uri http://localhost:$($runtime.ApiPort)/items/refresh -Body '{}'"
+
+if ($Foreground) {
+    Write-Host ""
+    Write-Host "Foreground mode follows worker logs. Press Ctrl+C to stop following logs."
+    $logResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("logs", "-f", "worker")) -WriteOutput
+    exit $logResult.ExitCode
+}
+
+Write-Host ""
+Write-Host "Docker status:"
+$statusResult = Invoke-TfwcHiddenProcess -FilePath $docker -Arguments (@(Get-TfwcComposeArguments) + @("ps")) -WriteOutput
+if ($statusResult.ExitCode -ne 0) {
+    Write-Warning "TimelineForWindowsCodex worker started, but Docker status could not be displayed."
+    exit 0
+}
 exit $startResult.ExitCode

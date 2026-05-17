@@ -4,7 +4,7 @@
 
 `TimelineForWindowsCodex` converts local Windows Codex Desktop history into per-thread Timeline-ready JSON artifacts. It preserves the user / assistant / system message chain so another LLM or the downstream Timeline product can consume it.
 
-Timeline uses the small local C# API for product operations:
+Timeline uses the worker-hosted local API for product operations:
 
 ```text
 GET http://localhost:<runtime.apiPort>/health
@@ -17,12 +17,10 @@ POST http://localhost:<runtime.apiPort>/settings/status
 POST http://localhost:<runtime.apiPort>/settings/init
 ```
 
-The health endpoint returns a JSON boolean: `true` or `false`. `items detail`,
-`items download`, `items remove`, `settings status`, and `settings init` are
-handled directly by the local C# API from `settings.json` and generated
-artifacts. `items list` and `items refresh` invoke the Docker worker directly
-from C#, so API access does not start the Docker
-worker implicitly.
+The health endpoint returns a JSON boolean: `true` or `false`. All product
+operations are handled by the resident Docker worker API. API access does not
+start processing implicitly; processing starts only when an operation endpoint
+such as `items refresh` is called.
 
 ## Scope
 
@@ -148,16 +146,12 @@ It covers API refresh/download, source-to-output fidelity, Windows launcher flow
 Additional direct checks:
 
 ```powershell
-dotnet build api\TimelineForWindowsCodex.HealthApi\TimelineForWindowsCodex.HealthApi.csproj
 python -m unittest discover -s worker\tests -v
 docker compose config --quiet
 ```
 
 ## Known Current Limits
 
-- `items detail`, `items download`, `items remove`, `settings status`, and
-  `settings init` are now local API operations over settings/generated artifacts.
-  `items list` and `items refresh` call the Docker worker directly from C#.
 - `items list` can be slow on large real Codex history because discovery still scans source history before pagination is applied.
 - Binary attachment contents are not exported.
 - Tool-call details, terminal output, and reasoning summaries are not exported into `timeline.json`.
