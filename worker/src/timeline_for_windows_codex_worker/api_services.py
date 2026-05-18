@@ -42,20 +42,6 @@ def sort_item_rows(items: list[Any]) -> list[dict[str, object]]:
 
 
 def resolve_pagination(page: int | None, page_size: int | None, total_count: int) -> dict[str, object]:
-    if page is None and page_size is None:
-        return {
-            "mode": "all",
-            "page": 1,
-            "page_size": total_count,
-            "total_items": total_count,
-            "total_pages": 1 if total_count else 0,
-            "offset": 0,
-            "range_start": 1 if total_count else 0,
-            "range_end": total_count,
-            "has_previous": False,
-            "has_next": False,
-        }
-
     effective_page = int(page or 1)
     effective_page_size = int(page_size or DEFAULT_ITEMS_LIST_PAGE_SIZE)
     if effective_page < 1:

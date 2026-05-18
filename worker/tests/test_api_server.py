@@ -59,14 +59,14 @@ class WorkerApiServerTests(unittest.TestCase):
                 self.assertEqual(init_payload["outputRoot"], str(outputs_root.resolve()))
                 self.assertEqual(init_payload["sourceRoots"], [str(FIXTURE_CODEX_HOME), str(ARCHIVED_FIXTURE_ROOT)])
 
-                list_status, list_payload = handle_request(
+                empty_list_status, empty_list_payload = handle_request(
                     "POST",
                     "/items/list",
                     {"pageSize": 1, "page": 1},
                 )
-                self.assertEqual(list_status, 200)
-                self.assertEqual(list_payload["pagination"]["mode"], "page")
-                self.assertEqual(list_payload["pagination"]["returned_items"], 1)
+                self.assertEqual(empty_list_status, 200)
+                self.assertEqual(empty_list_payload["pagination"]["mode"], "page")
+                self.assertEqual(empty_list_payload["pagination"]["returned_items"], 0)
 
                 refresh_status, refresh_payload = handle_request(
                     "POST",
@@ -81,6 +81,22 @@ class WorkerApiServerTests(unittest.TestCase):
                 self.assertEqual(refresh_payload["master_root"], str(outputs_root.resolve()))
                 self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "timeline.json").exists())
                 self.assertTrue(Path(refresh_payload["download"]["destination_path"]).exists())
+
+                list_status, list_payload = handle_request(
+                    "POST",
+                    "/items/list",
+                    {"pageSize": 1, "page": 1},
+                )
+                self.assertEqual(list_status, 200)
+                self.assertEqual(list_payload["source"], "master")
+                self.assertEqual(list_payload["pagination"]["mode"], "page")
+                self.assertEqual(list_payload["pagination"]["returned_items"], 1)
+                self.assertEqual(list_payload["items"][0]["item_id"], FIXTURE_THREAD_ID)
+
+                default_list_status, default_list_payload = handle_request("POST", "/items/list", {})
+                self.assertEqual(default_list_status, 200)
+                self.assertEqual(default_list_payload["pagination"]["mode"], "page")
+                self.assertLessEqual(default_list_payload["pagination"]["returned_items"], 100)
 
                 detail_status, detail_payload = handle_request(
                     "POST",

@@ -277,13 +277,19 @@ def collect_master_items(outputs_root: Path, selected_item_ids: list[str] | None
         if normalized_selection and thread_id.casefold() not in normalized_selection and item_dir.name.casefold() not in normalized_selection:
             continue
         thread_payload = _read_optional_json(timeline_path)
+        created_at = _payload_text(thread_payload, "created_at")
+        updated_at = _payload_text(thread_payload, "updated_at") or _payload_text(payload, "converted_at")
         rows.append(
             {
+                "item_id": thread_id,
                 "thread_id": thread_id,
                 "item_dir_name": item_dir.name,
                 "title": _payload_title(thread_payload, ThreadSelection(thread_id=thread_id, preferred_title=thread_id)),
+                "created_at": created_at,
+                "updated_at": updated_at,
                 "message_count": _message_count(payload, thread_payload),
                 "attachment_count": _attachment_count(payload, thread_payload),
+                "directory_path": str(item_dir),
                 "convert_info_path": str(convert_path),
                 "timeline_path": str(timeline_path),
             }
@@ -489,6 +495,10 @@ def _attachment_count(convert_payload: dict[str, object], thread_payload: dict[s
 def _payload_title(thread_payload: dict[str, object], thread: ThreadSelection) -> str:
     title = str(thread_payload.get("title") or "").strip()
     return title or thread.preferred_title or thread.thread_id
+
+
+def _payload_text(payload: dict[str, object], key: str) -> str:
+    return str(payload.get(key) or "").strip()
 
 
 def _timestamp_for_filename() -> str:

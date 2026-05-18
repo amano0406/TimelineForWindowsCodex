@@ -15,8 +15,8 @@ from .api_services import resolve_pagination
 from .api_services import resolve_source_roots
 from .api_services import select_threads
 from .api_services import sort_item_rows
-from .api_services import thread_selection_to_item
 from .processor import build_download_archive
+from .processor import collect_master_items
 from .processor import process_refresh
 from .processor import remove_master_items
 from .settings import UserSettings
@@ -100,10 +100,8 @@ def settings_status_payload(
 
 
 def items_list_payload(request: dict[str, Any]) -> dict[str, Any]:
-    _runtime, defaults, _user_settings, _outputs_root = runtime_context()
-    primary_root, backup_roots = resolve_source_roots(defaults)
-    discovered = discover_threads(primary_root, backup_roots, True)
-    all_items = sort_item_rows([thread_selection_to_item(thread) for thread in discovered])
+    _runtime, _defaults, _user_settings, outputs_root = runtime_context()
+    all_items = sort_item_rows(list_master_item_rows(outputs_root))
     pagination = resolve_pagination(
         get_optional_positive_int(request, ["page"]),
         get_optional_positive_int(request, ["pageSize", "page_size"]),
@@ -115,6 +113,8 @@ def items_list_payload(request: dict[str, Any]) -> dict[str, Any]:
         "state": "completed",
         "item_count": len(all_items),
         "total_items": len(all_items),
+        "source": "master",
+        "master_root": str(outputs_root),
         "sort": {
             "order": "desc",
             "fields": ["updated_at", "created_at", "thread_id"],
@@ -125,6 +125,25 @@ def items_list_payload(request: dict[str, Any]) -> dict[str, Any]:
         },
         "items": page_items,
     }
+
+
+def list_master_item_rows(outputs_root: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in collect_master_items(outputs_root):
+        item_id = str(row.get("thread_id") or row.get("item_dir_name") or "").strip()
+        directory_path = str(row.get("directory_path") or row.get("item_dir") or "")
+        rows.append(
+            {
+                **row,
+                "item_id": item_id,
+                "thread_id": item_id,
+                "directory_path": directory_path,
+                "directoryPath": directory_path,
+                "timelinePath": row.get("timeline_path") or "",
+                "convertInfoPath": row.get("convert_info_path") or "",
+            }
+        )
+    return rows
 
 
 def items_refresh_payload(request: dict[str, Any]) -> dict[str, Any]:
