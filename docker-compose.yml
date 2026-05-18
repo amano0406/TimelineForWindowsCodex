@@ -18,7 +18,7 @@ services:
     volumes:
       - ${HOST_TFWC_APP_DATA:-app-data}:/shared/app-data
       - ${HOST_TFWC_DOWNLOADS:-./downloads}:/shared/downloads
-      - ${HOST_TIMELINE_DATA:-/mnt/c/TimelineData}:/mnt/c/TimelineData
+      - ${HOST_TFWC_TIMELINE_DATA_ROOT:-${HOST_TIMELINE_DATA:-/mnt/c/TimelineData}}:${HOST_TFWC_TIMELINE_DATA_ROOT_CONTAINER:-/mnt/c/TimelineData}
       - ${HOST_TFWC_CONFIGURED_OUTPUT_ROOT:-./outputs}:${HOST_TFWC_CONFIGURED_OUTPUT_ROOT_CONTAINER:-/mnt/c/TimelineData/windows-codex}
       - ${HOST_TFWC_SETTINGS_FILE:-./settings.json}:/shared/app-data/settings.json
       - ${HOST_CODEX_HOME:-/mnt/c/Users/amano/.codex}:/input/codex-home:ro

@@ -14,6 +14,7 @@ if str(WORKER_SRC) not in sys.path:
     sys.path.insert(0, str(WORKER_SRC))
 
 from timeline_for_windows_codex_worker.api_server import handle_request  # noqa: E402
+from timeline_for_windows_codex_worker.api_services import runtime_path_to_config_text  # noqa: E402
 from timeline_for_windows_codex_worker.settings import load_runtime_paths  # noqa: E402
 
 
@@ -30,6 +31,12 @@ class WorkerApiServerTests(unittest.TestCase):
             runtime = load_runtime_paths()
 
         self.assertEqual(runtime.settings_path, (REPO_ROOT / "settings.json").resolve())
+
+    def test_runtime_path_to_config_text_returns_windows_host_path_for_wsl_mount(self) -> None:
+        with patch("timeline_for_windows_codex_worker.api_services.os.name", "posix"):
+            result = runtime_path_to_config_text("/mnt/c/apps/Timeline/data/work/downloads/windows-codex/export.zip")
+
+        self.assertEqual(result, r"C:\apps\Timeline\data\work\downloads\windows-codex\export.zip")
 
     def test_worker_api_handles_settings_items_detail_download_and_remove(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -97,6 +97,19 @@ def config_path_to_runtime_path(value: str) -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def runtime_path_to_config_text(value: str | Path) -> str:
+    raw = str(value or "").strip()
+    if os.name == "nt" or not raw:
+        return raw
+
+    normalized = raw.replace("\\", "/")
+    if len(normalized) >= 7 and normalized.startswith("/mnt/") and normalized[5].isalpha() and normalized[6] == "/":
+        drive = normalized[5].upper()
+        rest = normalized[7:].replace("/", "\\")
+        return f"{drive}:\\{rest}" if rest else f"{drive}:\\"
+    return raw
+
+
 def is_windows_drive_path(value: str) -> bool:
     return len(value) >= 3 and value[1] == ":" and value[2] in {"\\", "/"} and value[0].isalpha()
 

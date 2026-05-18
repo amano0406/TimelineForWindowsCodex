@@ -156,6 +156,31 @@ function Convert-TfwcHostPathToContainerPath {
     return $fullPath.Replace('\', '/')
 }
 
+function Get-TfwcTimelineDataRootFromOutputRoot {
+    param([string]$OutputRoot)
+
+    if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+        return $null
+    }
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($OutputRoot)
+    }
+    catch {
+        return $null
+    }
+
+    $productRoot = Split-Path -Parent $fullPath
+    if ([string]::IsNullOrWhiteSpace($productRoot)) {
+        return $null
+    }
+    $productParentName = Split-Path -Leaf $productRoot
+    if (-not $productParentName.Equals("to_text", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
+
+    return Split-Path -Parent $productRoot
+}
+
 function Set-TfwcDefaultEnvironmentValue {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -177,6 +202,11 @@ function Initialize-TfwcDockerMountEnvironment {
     if ($outputRoot) {
         Set-Item -Path "Env:HOST_TFWC_CONFIGURED_OUTPUT_ROOT" -Value $outputRoot
         Set-Item -Path "Env:HOST_TFWC_CONFIGURED_OUTPUT_ROOT_CONTAINER" -Value (Convert-TfwcHostPathToContainerPath -HostPath $outputRoot)
+        $timelineDataRoot = Get-TfwcTimelineDataRootFromOutputRoot -OutputRoot $outputRoot
+        if ($timelineDataRoot) {
+            Set-Item -Path "Env:HOST_TFWC_TIMELINE_DATA_ROOT" -Value $timelineDataRoot
+            Set-Item -Path "Env:HOST_TFWC_TIMELINE_DATA_ROOT_CONTAINER" -Value (Convert-TfwcHostPathToContainerPath -HostPath $timelineDataRoot)
+        }
     }
 }
 

@@ -13,6 +13,7 @@ from .api_services import effective_outputs_root
 from .api_services import resolve_destination_root
 from .api_services import resolve_pagination
 from .api_services import resolve_source_roots
+from .api_services import runtime_path_to_config_text
 from .api_services import select_threads
 from .api_services import sort_item_rows
 from .processor import build_download_archive
@@ -168,11 +169,13 @@ def items_refresh_payload(request: dict[str, Any]) -> dict[str, Any]:
     result = process_refresh(refresh_request, outputs_root)
     download_to = get_string_any(request, ["downloadTo", "download_to", "to"])
     if download_to:
-        result["download"] = build_download_archive(
-            outputs_root,
-            resolve_destination_root(download_to),
-            overwrite=get_bool_any(request, ["overwrite"], False),
-            selected_item_ids=get_item_ids(request),
+        result["download"] = normalize_download_response(
+            build_download_archive(
+                outputs_root,
+                resolve_destination_root(download_to),
+                overwrite=get_bool_any(request, ["overwrite"], False),
+                selected_item_ids=get_item_ids(request),
+            )
         )
     return result
 
@@ -182,12 +185,22 @@ def items_download_payload(request: dict[str, Any]) -> dict[str, Any]:
     destination = get_string_any(request, ["to", "downloadTo", "download_to", "outputPath", "output_path"])
     if not destination:
         raise ValueError("Download destination is required.")
-    return build_download_archive(
-        outputs_root,
-        resolve_destination_root(destination),
-        overwrite=get_bool_any(request, ["overwrite"], False),
-        selected_item_ids=get_item_ids(request),
+    return normalize_download_response(
+        build_download_archive(
+            outputs_root,
+            resolve_destination_root(destination),
+            overwrite=get_bool_any(request, ["overwrite"], False),
+            selected_item_ids=get_item_ids(request),
+        )
     )
+
+
+def normalize_download_response(payload: dict[str, object]) -> dict[str, object]:
+    normalized = dict(payload)
+    destination_path = normalized.get("destination_path")
+    if destination_path:
+        normalized["destination_path"] = runtime_path_to_config_text(str(destination_path))
+    return normalized
 
 
 def items_remove_payload(request: dict[str, Any]) -> dict[str, Any]:
