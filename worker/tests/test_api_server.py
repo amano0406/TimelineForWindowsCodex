@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -88,6 +89,31 @@ class WorkerApiServerTests(unittest.TestCase):
                 self.assertEqual(refresh_payload["master_root"], str(outputs_root.resolve()))
                 self.assertTrue((outputs_root / FIXTURE_THREAD_ID / "timeline.json").exists())
                 self.assertTrue(Path(refresh_payload["download"]["destination_path"]).exists())
+
+                jobs_status, jobs_payload = handle_request(
+                    "POST",
+                    "/jobs",
+                    {
+                        "type": "refresh",
+                        "options": {
+                            "itemIds": [FIXTURE_THREAD_ID],
+                        },
+                    },
+                )
+                self.assertEqual(jobs_status, 200)
+                self.assertEqual(jobs_payload["productId"], "windows-codex")
+                self.assertTrue(jobs_payload["jobId"])
+                job_id = jobs_payload["jobId"]
+                job_payload = jobs_payload
+                for _ in range(50):
+                    job_status, job_payload = handle_request("GET", f"/jobs/{job_id}", None)
+                    self.assertEqual(job_status, 200)
+                    if job_payload["state"] not in {"queued", "running"}:
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(job_payload["state"], "completed")
+                self.assertEqual(job_payload["progress"]["percent"], 100)
+                self.assertEqual(job_payload["result"]["state"], "completed")
 
                 list_status, list_payload = handle_request(
                     "POST",

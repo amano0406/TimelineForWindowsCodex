@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 from .discovery import discover_threads
+from .fs_utils import ensure_dir
 from .fs_utils import now_iso
+from .fs_utils import write_json_atomic
 from .api_services import effective_outputs_root
 from .api_services import resolve_destination_root
 from .api_services import resolve_pagination
@@ -29,15 +32,30 @@ from .settings import user_settings_path
 from .contracts import RefreshRequest
 
 
+PRODUCT_ID = "windows-codex"
+PRODUCT_NAME = "TimelineForWindowsCodex"
+JOB_SCHEMA_VERSION = 1
+ACTIVE_JOBS: dict[str, threading.Thread] = {}
+ACTIVE_JOBS_LOCK = threading.Lock()
+
+
 def handle_request(method: str, path: str, request: dict[str, Any] | None) -> tuple[int, Any]:
     route = path.rstrip("/") or "/"
     if method == "GET" and route == "/health":
         return HTTPStatus.OK, True
+    if method == "GET" and route == "/jobs":
+        return HTTPStatus.OK, jobs_list_payload()
+    if method == "GET" and route == "/jobs/active":
+        return HTTPStatus.OK, jobs_active_payload()
+    if method == "GET" and route.startswith("/jobs/"):
+        return HTTPStatus.OK, job_status_payload(route.removeprefix("/jobs/"))
     if method != "POST":
         return HTTPStatus.NOT_FOUND, error_payload(f"Endpoint not found: {method} {path}")
 
     try:
         payload = request or {}
+        if route == "/jobs":
+            return HTTPStatus.OK, jobs_start_payload(payload)
         if route == "/settings/init":
             return HTTPStatus.OK, settings_init_payload(payload)
         if route == "/settings/status":
@@ -148,25 +166,39 @@ def list_master_item_rows(outputs_root: Path) -> list[dict[str, object]]:
 
 
 def items_refresh_payload(request: dict[str, Any]) -> dict[str, Any]:
+    refresh_id = get_string_any(request, ["refreshId", "refresh_id", "jobId", "job_id"])
+    if not refresh_id:
+        refresh_id = new_job_id("refresh")
+    refresh_request, outputs_root = build_refresh_request(request, refresh_id)
+    result = process_refresh(refresh_request, outputs_root)
+    append_optional_download(result, request, outputs_root)
+    return result
+
+
+def build_refresh_request(request: dict[str, Any], refresh_id: str) -> tuple[RefreshRequest, Path]:
     _runtime, defaults, _user_settings, outputs_root = runtime_context()
     primary_root, backup_roots = resolve_source_roots(defaults)
     discovered = discover_threads(primary_root, backup_roots, True)
     selected_threads = select_threads(discovered, get_item_ids(request))
     if not selected_threads:
         raise ValueError("No threads matched the current selection.")
-    refresh_id = f"refresh-{now_iso().replace(':', '').replace('-', '')[:15]}-{os.urandom(4).hex()}"
-    refresh_request = RefreshRequest(
-        refresh_id=refresh_id,
-        created_at=now_iso(),
-        primary_codex_home_path=primary_root,
-        backup_codex_home_paths=backup_roots,
-        include_archived_sources=True,
-        include_tool_outputs=False,
-        include_compaction_recovery=False,
-        redaction_profile="none",
-        selected_threads=selected_threads,
+    return (
+        RefreshRequest(
+            refresh_id=refresh_id,
+            created_at=now_iso(),
+            primary_codex_home_path=primary_root,
+            backup_codex_home_paths=backup_roots,
+            include_archived_sources=True,
+            include_tool_outputs=False,
+            include_compaction_recovery=False,
+            redaction_profile="none",
+            selected_threads=selected_threads,
+        ),
+        outputs_root,
     )
-    result = process_refresh(refresh_request, outputs_root)
+
+
+def append_optional_download(result: dict[str, object], request: dict[str, Any], outputs_root: Path) -> None:
     download_to = get_string_any(request, ["downloadTo", "download_to", "to"])
     if download_to:
         result["download"] = normalize_download_response(
@@ -177,7 +209,311 @@ def items_refresh_payload(request: dict[str, Any]) -> dict[str, Any]:
                 selected_item_ids=get_item_ids(request),
             )
         )
-    return result
+
+
+def jobs_start_payload(request: dict[str, Any]) -> dict[str, Any]:
+    if get_string_any(request, ["type"]) not in {"", "refresh"}:
+        raise ValueError("Unsupported job type.")
+
+    active_status = get_first_active_job_status()
+    if active_status is not None:
+        return active_status
+
+    options_node = request.get("options")
+    options = dict(options_node) if isinstance(options_node, dict) else dict(request)
+    job_id = get_string_any(request, ["jobId", "job_id", "refreshId", "refresh_id"])
+    if not job_id:
+        job_id = new_job_id("job")
+    job_id = sanitize_job_id(job_id)
+    options["refreshId"] = job_id
+
+    write_job_status(
+        job_id,
+        state="queued",
+        phase="refresh",
+        stage="queued",
+        message="Windows Codex refresh is queued.",
+        progress={"percent": 0, "current": 0, "total": 0, "unit": "threads", "currentItem": ""},
+    )
+    thread = threading.Thread(target=run_refresh_job, args=(job_id, options), daemon=True)
+    with ACTIVE_JOBS_LOCK:
+        ACTIVE_JOBS[job_id] = thread
+    thread.start()
+    return read_job_status(job_id) or make_job_status(job_id, state="queued", message="Windows Codex refresh is queued.")
+
+
+def jobs_active_payload() -> dict[str, Any]:
+    status = get_first_active_job_status()
+    if status is not None:
+        return status
+    return make_job_status(
+        "",
+        state="none",
+        phase="idle",
+        stage="idle",
+        message="No Windows Codex refresh job is active.",
+        progress={"percent": 0, "current": 0, "total": 0, "unit": "threads", "currentItem": ""},
+    )
+
+
+def jobs_list_payload() -> dict[str, Any]:
+    mark_stale_jobs_interrupted(active_job_ids())
+    statuses = []
+    for path in sorted(jobs_root().glob("*/status.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        status = read_json_object(path)
+        if status is not None:
+            statuses.append(normalize_job_status(status))
+    return {
+        "schemaVersion": JOB_SCHEMA_VERSION,
+        "productId": PRODUCT_ID,
+        "productName": PRODUCT_NAME,
+        "jobs": statuses,
+    }
+
+
+def job_status_payload(job_id: str) -> dict[str, Any]:
+    normalized_id = sanitize_job_id(job_id)
+    mark_stale_jobs_interrupted(active_job_ids())
+    status = read_job_status(normalized_id)
+    if status is None:
+        raise ValueError("Job was not found.")
+    return status
+
+
+def run_refresh_job(job_id: str, options: dict[str, Any]) -> None:
+    try:
+        update_job_status(
+            job_id,
+            state="running",
+            phase="refresh",
+            stage="discover",
+            message="Discovering Windows Codex threads.",
+            startedAt=now_iso(),
+        )
+        refresh_request, outputs_root = build_refresh_request(options, job_id)
+        total = len(refresh_request.selected_threads)
+        update_job_status(
+            job_id,
+            state="running",
+            phase="refresh",
+            stage="convert",
+            message="Refreshing Windows Codex threads.",
+            progress={"percent": 0, "current": 0, "total": total, "unit": "threads", "currentItem": ""},
+        )
+
+        def on_progress(progress: dict[str, object]) -> None:
+            current = int(progress.get("current") or 0)
+            progress_total = int(progress.get("total") or total)
+            percent = round((current / progress_total) * 95, 2) if progress_total > 0 else 0
+            update_job_status(
+                job_id,
+                state="running",
+                phase="refresh",
+                stage=str(progress.get("stage") or "convert"),
+                message=str(progress.get("message") or "Refreshing Windows Codex threads."),
+                progress={
+                    "percent": percent,
+                    "current": current,
+                    "total": progress_total,
+                    "unit": "threads",
+                    "currentItem": str(progress.get("current_item") or progress.get("currentItem") or ""),
+                },
+            )
+
+        result = process_refresh(refresh_request, outputs_root, progress_callback=on_progress)
+        if get_string_any(options, ["downloadTo", "download_to", "to"]):
+            update_job_status(
+                job_id,
+                state="running",
+                phase="refresh",
+                stage="download",
+                message="Creating Windows Codex download archive.",
+                progress={"percent": 96, "current": total, "total": total, "unit": "threads", "currentItem": ""},
+            )
+            append_optional_download(result, options, outputs_root)
+        update_job_status(
+            job_id,
+            state="completed",
+            phase="refresh",
+            stage="completed",
+            message="Windows Codex refresh completed.",
+            completedAt=now_iso(),
+            progress={"percent": 100, "current": total, "total": total, "unit": "threads", "currentItem": ""},
+            error="",
+            result=result,
+        )
+    except Exception as exc:
+        update_job_status(
+            job_id,
+            state="failed",
+            phase="refresh",
+            stage="failed",
+            message="Windows Codex refresh failed.",
+            completedAt=now_iso(),
+            error=str(exc),
+        )
+    finally:
+        with ACTIVE_JOBS_LOCK:
+            ACTIVE_JOBS.pop(job_id, None)
+
+
+def get_first_active_job_status() -> dict[str, Any] | None:
+    active_ids = active_job_ids()
+    mark_stale_jobs_interrupted(active_ids)
+    for job_id in sorted(active_ids):
+        status = read_job_status(job_id)
+        if status is not None:
+            return status
+    return None
+
+
+def active_job_ids() -> set[str]:
+    with ACTIVE_JOBS_LOCK:
+        dead = [job_id for job_id, thread in ACTIVE_JOBS.items() if not thread.is_alive()]
+        for job_id in dead:
+            ACTIVE_JOBS.pop(job_id, None)
+        return set(ACTIVE_JOBS)
+
+
+def mark_stale_jobs_interrupted(active_ids: set[str]) -> None:
+    for path in jobs_root().glob("*/status.json"):
+        status = read_json_object(path)
+        if status is None:
+            continue
+        job_id = str(status.get("jobId") or path.parent.name)
+        if job_id in active_ids:
+            continue
+        state = str(status.get("state") or "").lower()
+        if state not in {"queued", "running"}:
+            continue
+        update_job_status(
+            job_id,
+            state="interrupted",
+            phase=str(status.get("phase") or "refresh"),
+            stage="interrupted",
+            message="Windows Codex refresh was interrupted before completion.",
+            completedAt=now_iso(),
+            error="The worker process stopped or the in-memory job was lost before the refresh completed.",
+        )
+
+
+def write_job_status(
+    job_id: str,
+    *,
+    state: str,
+    phase: str = "refresh",
+    stage: str = "",
+    message: str = "",
+    progress: dict[str, object] | None = None,
+    error: str = "",
+    result: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    status = make_job_status(job_id, state=state, phase=phase, stage=stage, message=message, progress=progress, error=error, result=result)
+    write_json_atomic(job_status_path(job_id), status)
+    return status
+
+
+def update_job_status(job_id: str, **fields: Any) -> dict[str, Any]:
+    status = read_job_status(job_id) or make_job_status(job_id, state="queued", message="Windows Codex refresh is queued.")
+    for key, value in fields.items():
+        if value is not None:
+            status[key] = value
+    status["updatedAt"] = now_iso()
+    if status.get("state") in {"completed", "failed", "interrupted"} and not status.get("completedAt"):
+        status["completedAt"] = now_iso()
+    write_json_atomic(job_status_path(job_id), status)
+    return normalize_job_status(status)
+
+
+def make_job_status(
+    job_id: str,
+    *,
+    state: str,
+    phase: str = "refresh",
+    stage: str = "",
+    message: str = "",
+    progress: dict[str, object] | None = None,
+    error: str = "",
+    result: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    now = now_iso()
+    return {
+        "schemaVersion": JOB_SCHEMA_VERSION,
+        "productId": PRODUCT_ID,
+        "productName": PRODUCT_NAME,
+        "type": "refresh",
+        "jobId": job_id,
+        "state": state,
+        "phase": phase,
+        "stage": stage,
+        "message": message,
+        "progress": progress or {"percent": 0, "current": 0, "total": 0, "unit": "threads", "currentItem": ""},
+        "startedAt": now if state in {"running", "completed", "failed", "interrupted"} else "",
+        "updatedAt": now,
+        "completedAt": now if state in {"completed", "failed", "interrupted"} else "",
+        "error": error,
+        "warnings": [],
+        "result": result,
+    }
+
+
+def normalize_job_status(status: dict[str, Any]) -> dict[str, Any]:
+    progress = status.get("progress")
+    if not isinstance(progress, dict):
+        progress = {"percent": 0, "current": 0, "total": 0, "unit": "threads", "currentItem": ""}
+    normalized = {
+        "schemaVersion": int(status.get("schemaVersion") or JOB_SCHEMA_VERSION),
+        "productId": str(status.get("productId") or PRODUCT_ID),
+        "productName": str(status.get("productName") or PRODUCT_NAME),
+        "type": str(status.get("type") or "refresh"),
+        "jobId": str(status.get("jobId") or ""),
+        "state": str(status.get("state") or ""),
+        "phase": str(status.get("phase") or ""),
+        "stage": str(status.get("stage") or ""),
+        "message": str(status.get("message") or ""),
+        "progress": {
+            "percent": float(progress.get("percent") or 0),
+            "current": int(progress.get("current") or 0),
+            "total": int(progress.get("total") or 0),
+            "unit": str(progress.get("unit") or "threads"),
+            "currentItem": str(progress.get("currentItem") or progress.get("current_item") or ""),
+        },
+        "startedAt": str(status.get("startedAt") or ""),
+        "updatedAt": str(status.get("updatedAt") or ""),
+        "completedAt": str(status.get("completedAt") or ""),
+        "error": str(status.get("error") or ""),
+        "warnings": status.get("warnings") if isinstance(status.get("warnings"), list) else [],
+        "result": status.get("result"),
+    }
+    if normalized["state"] == "interrupted" and not normalized["error"]:
+        normalized["error"] = normalized["message"]
+    return normalized
+
+
+def read_job_status(job_id: str) -> dict[str, Any] | None:
+    payload = read_json_object(job_status_path(job_id))
+    return normalize_job_status(payload) if payload is not None else None
+
+
+def job_status_path(job_id: str) -> Path:
+    return jobs_root() / sanitize_job_id(job_id) / "status.json"
+
+
+def jobs_root() -> Path:
+    runtime = load_runtime_paths()
+    return ensure_dir(runtime.appdata_root / "jobs")
+
+
+def new_job_id(prefix: str) -> str:
+    return f"{prefix}-{now_iso().replace(':', '').replace('-', '')[:15]}-{os.urandom(4).hex()}"
+
+
+def sanitize_job_id(job_id: str) -> str:
+    text = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in str(job_id or "").strip())
+    text = text.strip("-_.")
+    if not text:
+        raise ValueError("Job id is required.")
+    return text[:160]
 
 
 def items_download_payload(request: dict[str, Any]) -> dict[str, Any]:

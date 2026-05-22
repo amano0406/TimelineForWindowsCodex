@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -27,7 +28,11 @@ RENDER_CONTRACT_VERSION = 5
 THREAD_CACHE_SCHEMA_VERSION = 2
 
 
-def process_refresh(request: RefreshRequest, outputs_root: Path) -> dict[str, object]:
+def process_refresh(
+    request: RefreshRequest,
+    outputs_root: Path,
+    progress_callback: Callable[[dict[str, object]], None] | None = None,
+) -> dict[str, object]:
     """Refresh the fixed master artifact root.
 
     The master root is intentionally not a run database. It only stores the
@@ -50,7 +55,18 @@ def process_refresh(request: RefreshRequest, outputs_root: Path) -> dict[str, ob
     reused_thread_count = 0
     rendered_thread_count = 0
 
-    for thread in request.selected_threads:
+    total_threads = len(request.selected_threads)
+    for index, thread in enumerate(request.selected_threads):
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "stage": "thread",
+                    "message": "Refreshing Codex thread.",
+                    "current": index,
+                    "total": total_threads,
+                    "current_item": thread.thread_id,
+                }
+            )
         thread_started = time.perf_counter()
         row = refresh_thread_item(
             request=request,
@@ -71,6 +87,16 @@ def process_refresh(request: RefreshRequest, outputs_root: Path) -> dict[str, ob
             rendered_thread_count += 1
         total_messages += int(row.get("message_count") or 0)
         total_attachments += int(row.get("attachment_count") or 0)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "stage": "thread",
+                    "message": "Codex thread refreshed.",
+                    "current": index + 1,
+                    "total": total_threads,
+                    "current_item": thread.thread_id,
+                }
+            )
 
     return {
         "schema_version": 1,
