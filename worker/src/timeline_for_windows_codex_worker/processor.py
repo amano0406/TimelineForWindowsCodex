@@ -73,6 +73,19 @@ def process_refresh(
             thread=thread,
             outputs_root=outputs_root,
             converted_at=completed_at,
+            pre_commit=(
+                lambda thread_id=thread.thread_id, current=index: progress_callback(
+                    {
+                        "stage": "commit_thread",
+                        "message": "Committing refreshed Codex thread.",
+                        "current": current,
+                        "total": total_threads,
+                        "current_item": thread_id,
+                    }
+                )
+                if progress_callback is not None
+                else None
+            ),
         )
         row["processing_duration_ms"] = round((time.perf_counter() - thread_started) * 1000.0, 3)
         rows.append(row)
@@ -123,6 +136,7 @@ def refresh_thread_item(
     thread: ThreadSelection,
     outputs_root: Path,
     converted_at: str,
+    pre_commit: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     resolved_session_path = resolve_thread_session_path(thread)
     if resolved_session_path is not None:
@@ -132,7 +146,7 @@ def refresh_thread_item(
     source_type = _source_type_from_path(resolved_session_path)
     cache_key = build_thread_cache_key(request, thread, source_fingerprint)
     export_thread_dir = export_thread_dir_name(thread.thread_id)
-    item_dir = ensure_dir(outputs_root / export_thread_dir)
+    item_dir = outputs_root / export_thread_dir
     timeline_path = item_dir / THREAD_FINAL_FILE_NAME
     convert_path = item_dir / THREAD_CONVERT_FILE_NAME
     legacy_convert_path = item_dir / "convert.json"
@@ -187,12 +201,29 @@ def refresh_thread_item(
     convert_payload["converted_at"] = converted_at
     convert_payload["timeline_path"] = str(timeline_path)
 
-    write_json_atomic(timeline_path, thread_payload)
-    write_json_atomic(convert_path, convert_payload)
-    if legacy_convert_path.exists() and legacy_convert_path != convert_path:
-        legacy_convert_path.unlink()
-    if legacy_thread_path.exists() and legacy_thread_path != timeline_path:
-        legacy_thread_path.unlink()
+    staging_dir = outputs_root / ".tmp" / f"{export_thread_dir}-{hashlib.sha256(cache_key.encode('utf-8')).hexdigest()[:12]}"
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    ensure_dir(staging_dir)
+    try:
+        staging_timeline_path = staging_dir / THREAD_FINAL_FILE_NAME
+        staging_convert_path = staging_dir / THREAD_CONVERT_FILE_NAME
+        convert_payload["timeline_path"] = str(timeline_path)
+        write_json_atomic(staging_timeline_path, thread_payload)
+        write_json_atomic(staging_convert_path, convert_payload)
+        if pre_commit is not None:
+            pre_commit()
+        ensure_dir(outputs_root)
+        if item_dir.exists():
+            shutil.rmtree(item_dir)
+        shutil.move(str(staging_dir), str(item_dir))
+        if legacy_convert_path.exists() and legacy_convert_path != convert_path:
+            legacy_convert_path.unlink()
+        if legacy_thread_path.exists() and legacy_thread_path != timeline_path:
+            legacy_thread_path.unlink()
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
     status = "changed" if existed_before else "new"
     return {

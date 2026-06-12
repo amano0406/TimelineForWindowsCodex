@@ -37,6 +37,13 @@ PRODUCT_NAME = "TimelineForWindowsCodex"
 JOB_SCHEMA_VERSION = 1
 ACTIVE_JOBS: dict[str, threading.Thread] = {}
 ACTIVE_JOBS_LOCK = threading.Lock()
+CANCEL_REQUESTS: set[str] = set()
+CANCEL_REQUESTS_LOCK = threading.Lock()
+CANCEL_REQUEST_FILE = ".cancel-requested"
+
+
+class JobCancellationRequested(RuntimeError):
+    pass
 
 
 def handle_request(method: str, path: str, request: dict[str, Any] | None) -> tuple[int, Any]:
@@ -56,6 +63,9 @@ def handle_request(method: str, path: str, request: dict[str, Any] | None) -> tu
         payload = request or {}
         if route == "/jobs":
             return HTTPStatus.OK, jobs_start_payload(payload)
+        if route.startswith("/jobs/") and route.endswith("/cancel"):
+            job_id = route[len("/jobs/") : -len("/cancel")].strip()
+            return HTTPStatus.OK, jobs_cancel_payload(job_id)
         if route == "/settings/init":
             return HTTPStatus.OK, settings_init_payload(payload)
         if route == "/settings/status":
@@ -280,8 +290,33 @@ def job_status_payload(job_id: str) -> dict[str, Any]:
     return status
 
 
+def jobs_cancel_payload(job_id: str) -> dict[str, Any]:
+    normalized_id = sanitize_job_id(job_id)
+    if not normalized_id:
+        raise ValueError("Job id is required.")
+    with CANCEL_REQUESTS_LOCK:
+        CANCEL_REQUESTS.add(normalized_id)
+    write_json_atomic(
+        job_cancel_path(normalized_id),
+        {"requestedAt": now_iso(), "message": "Cancellation requested."},
+    )
+    status = read_job_status(normalized_id)
+    if status is None:
+        raise ValueError("Job was not found.")
+    if str(status.get("state") or "").lower() not in {"queued", "running", "canceling"}:
+        return status
+    return update_job_status(
+        normalized_id,
+        state="canceling",
+        phase=str(status.get("phase") or "refresh"),
+        stage="canceling",
+        message="Windows Codex refresh cancellation was requested.",
+    )
+
+
 def run_refresh_job(job_id: str, options: dict[str, Any]) -> None:
     try:
+        raise_if_job_cancel_requested(job_id)
         update_job_status(
             job_id,
             state="running",
@@ -302,6 +337,7 @@ def run_refresh_job(job_id: str, options: dict[str, Any]) -> None:
         )
 
         def on_progress(progress: dict[str, object]) -> None:
+            raise_if_job_cancel_requested(job_id)
             current = int(progress.get("current") or 0)
             progress_total = int(progress.get("total") or total)
             percent = round((current / progress_total) * 95, 2) if progress_total > 0 else 0
@@ -321,6 +357,7 @@ def run_refresh_job(job_id: str, options: dict[str, Any]) -> None:
             )
 
         result = process_refresh(refresh_request, outputs_root, progress_callback=on_progress)
+        raise_if_job_cancel_requested(job_id)
         if get_string_any(options, ["downloadTo", "download_to", "to"]):
             update_job_status(
                 job_id,
@@ -331,6 +368,7 @@ def run_refresh_job(job_id: str, options: dict[str, Any]) -> None:
                 progress={"percent": 96, "current": total, "total": total, "unit": "threads", "currentItem": ""},
             )
             append_optional_download(result, options, outputs_root)
+        raise_if_job_cancel_requested(job_id)
         update_job_status(
             job_id,
             state="completed",
@@ -341,6 +379,16 @@ def run_refresh_job(job_id: str, options: dict[str, Any]) -> None:
             progress={"percent": 100, "current": total, "total": total, "unit": "threads", "currentItem": ""},
             error="",
             result=result,
+        )
+    except JobCancellationRequested as exc:
+        update_job_status(
+            job_id,
+            state="canceled",
+            phase="refresh",
+            stage="canceled",
+            message=str(exc) or "Windows Codex refresh was canceled.",
+            completedAt=now_iso(),
+            error="",
         )
     except Exception as exc:
         update_job_status(
@@ -355,6 +403,8 @@ def run_refresh_job(job_id: str, options: dict[str, Any]) -> None:
     finally:
         with ACTIVE_JOBS_LOCK:
             ACTIVE_JOBS.pop(job_id, None)
+        with CANCEL_REQUESTS_LOCK:
+            CANCEL_REQUESTS.discard(job_id)
 
 
 def get_first_active_job_status() -> dict[str, Any] | None:
@@ -373,6 +423,15 @@ def active_job_ids() -> set[str]:
         for job_id in dead:
             ACTIVE_JOBS.pop(job_id, None)
         return set(ACTIVE_JOBS)
+
+
+def raise_if_job_cancel_requested(job_id: str) -> None:
+    with CANCEL_REQUESTS_LOCK:
+        requested = job_id in CANCEL_REQUESTS
+    if not requested:
+        requested = job_cancel_path(job_id).exists()
+    if requested:
+        raise JobCancellationRequested("Windows Codex refresh was canceled.")
 
 
 def mark_stale_jobs_interrupted(active_ids: set[str]) -> None:
@@ -419,7 +478,7 @@ def update_job_status(job_id: str, **fields: Any) -> dict[str, Any]:
         if value is not None:
             status[key] = value
     status["updatedAt"] = now_iso()
-    if status.get("state") in {"completed", "failed", "interrupted"} and not status.get("completedAt"):
+    if status.get("state") in {"completed", "failed", "interrupted", "canceled"} and not status.get("completedAt"):
         status["completedAt"] = now_iso()
     write_json_atomic(job_status_path(job_id), status)
     return normalize_job_status(status)
@@ -448,9 +507,9 @@ def make_job_status(
         "stage": stage,
         "message": message,
         "progress": progress or {"percent": 0, "current": 0, "total": 0, "unit": "threads", "currentItem": ""},
-        "startedAt": now if state in {"running", "completed", "failed", "interrupted"} else "",
+        "startedAt": now if state in {"running", "completed", "failed", "interrupted", "canceled"} else "",
         "updatedAt": now,
-        "completedAt": now if state in {"completed", "failed", "interrupted"} else "",
+        "completedAt": now if state in {"completed", "failed", "interrupted", "canceled"} else "",
         "error": error,
         "warnings": [],
         "result": result,
@@ -497,6 +556,12 @@ def read_job_status(job_id: str) -> dict[str, Any] | None:
 
 def job_status_path(job_id: str) -> Path:
     return jobs_root() / sanitize_job_id(job_id) / "status.json"
+
+
+def job_cancel_path(job_id: str) -> Path:
+    job_root = jobs_root() / sanitize_job_id(job_id)
+    job_root.mkdir(parents=True, exist_ok=True)
+    return job_root / CANCEL_REQUEST_FILE
 
 
 def jobs_root() -> Path:
