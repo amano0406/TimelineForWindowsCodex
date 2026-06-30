@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from .discovery import discover_threads
+from .discovery import discover_threads, discover_threads_by_ids, discover_threads_limited
 from .fs_utils import ensure_dir
 from .fs_utils import now_iso
 from .fs_utils import write_json_atomic
@@ -188,8 +188,17 @@ def items_refresh_payload(request: dict[str, Any]) -> dict[str, Any]:
 def build_refresh_request(request: dict[str, Any], refresh_id: str) -> tuple[RefreshRequest, Path]:
     _runtime, defaults, _user_settings, outputs_root = runtime_context()
     primary_root, backup_roots = resolve_source_roots(defaults)
-    discovered = discover_threads(primary_root, backup_roots, True)
-    selected_threads = select_threads(discovered, get_item_ids(request))
+    item_ids = get_item_ids(request)
+    max_items = get_optional_positive_int(request, ["maxItems", "max_items"])
+    selected_threads = (
+        discover_threads_by_ids(primary_root, backup_roots, item_ids, True)
+        if item_ids
+        else discover_threads_limited(primary_root, backup_roots, max_items, True)
+        if max_items is not None
+        else select_threads(discover_threads(primary_root, backup_roots, True), item_ids)
+    )
+    if max_items is not None:
+        selected_threads = selected_threads[:max_items]
     if not selected_threads:
         raise ValueError("No threads matched the current selection.")
     return (

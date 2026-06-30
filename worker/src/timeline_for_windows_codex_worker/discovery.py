@@ -47,6 +47,72 @@ def discover_threads(
         if include_archived_sources:
             _merge_thread_read_files(root_path, root_kind, priority, threads)
 
+    return _sorted_thread_rows(threads)
+
+
+def discover_threads_limited(
+    primary_root_path: str,
+    backup_root_paths: Iterable[str],
+    limit: int,
+    include_archived_sources: bool = True,
+) -> list[ThreadSelection]:
+    if limit <= 0:
+        return []
+
+    roots = _build_roots(primary_root_path, backup_root_paths)
+    threads: dict[str, MutableThread] = {}
+
+    for root_path, root_kind, priority in roots:
+        _merge_session_index(root_path, root_kind, priority, threads)
+        _merge_state_catalog(root_path, root_kind, priority, threads)
+
+    rows = _sorted_thread_rows(threads)
+    candidates = rows[:limit]
+    if len(candidates) >= limit and all(item.session_path for item in candidates):
+        return candidates
+
+    candidate_ids = [item.thread_id for item in candidates if item.thread_id]
+    if candidate_ids:
+        return discover_threads_by_ids(
+            primary_root_path,
+            backup_root_paths,
+            candidate_ids,
+            include_archived_sources,
+        )[:limit]
+
+    return discover_threads(primary_root_path, backup_root_paths, include_archived_sources)[:limit]
+
+
+def discover_threads_by_ids(
+    primary_root_path: str,
+    backup_root_paths: Iterable[str],
+    thread_ids: Iterable[str],
+    include_archived_sources: bool = True,
+) -> list[ThreadSelection]:
+    normalized_ids = _normalize_requested_thread_ids(thread_ids)
+    if not normalized_ids:
+        return discover_threads(primary_root_path, backup_root_paths, include_archived_sources)
+
+    roots = _build_roots(primary_root_path, backup_root_paths)
+    threads: dict[str, MutableThread] = {}
+
+    for root_path, root_kind, priority in roots:
+        _merge_state_catalog_by_ids(root_path, root_kind, priority, threads, normalized_ids)
+        for thread_id in normalized_ids:
+            _merge_session_files_by_id(root_path, root_kind, priority, threads, thread_id, include_archived_sources)
+            if include_archived_sources:
+                _merge_thread_read_files_by_id(root_path, root_kind, priority, threads, thread_id)
+
+    rows_by_id = {thread.thread_id.casefold(): thread for thread in _sorted_thread_rows(threads)}
+
+    missing = [thread_id for thread_id in normalized_ids if thread_id.casefold() not in rows_by_id]
+    if missing:
+        raise ValueError(f"Unknown item ids: {', '.join(missing)}")
+
+    return [rows_by_id[thread_id.casefold()] for thread_id in normalized_ids]
+
+
+def _sorted_thread_rows(threads: dict[str, MutableThread]) -> list[ThreadSelection]:
     rows = [
         ThreadSelection(
             thread_id=thread.thread_id,
@@ -70,6 +136,16 @@ def discover_threads(
         ),
         reverse=True,
     )
+
+
+def _normalize_requested_thread_ids(thread_ids: Iterable[str]) -> list[str]:
+    normalized_ids: list[str] = []
+    for raw_id in thread_ids:
+        for item in str(raw_id or "").split(","):
+            thread_id = item.strip()
+            if thread_id and thread_id.casefold() not in {existing.casefold() for existing in normalized_ids}:
+                normalized_ids.append(thread_id)
+    return normalized_ids
 
 
 def _build_roots(
@@ -195,6 +271,71 @@ def _merge_state_catalog(
                 thread.updated_at = updated_at
 
 
+def _merge_state_catalog_by_ids(
+    root_path: Path,
+    root_kind: str,
+    priority: int,
+    threads: dict[str, MutableThread],
+    thread_ids: list[str],
+) -> None:
+    state_database_path = root_path / "state_5.sqlite"
+    if not state_database_path.exists() or not thread_ids:
+        return
+
+    try:
+        connection = sqlite3.connect(f"file:{state_database_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return
+
+    with connection:
+        try:
+            placeholders = ",".join("?" for _ in thread_ids)
+            cursor = connection.execute(
+                f"""
+                SELECT
+                    id,
+                    rollout_path,
+                    updated_at,
+                    cwd,
+                    first_user_message
+                FROM threads
+                WHERE lower(id) IN ({placeholders})
+                """,
+                [thread_id.casefold() for thread_id in thread_ids],
+            )
+        except sqlite3.Error:
+            return
+
+        for row in cursor:
+            thread_id = str(row[0] or "").strip()
+            if not thread_id:
+                continue
+
+            rollout_path = str(row[1] or "").strip()
+            updated_at = _to_iso_from_unix(row[2]) if row[2] is not None else None
+            cwd = str(row[3] or "").strip() or None
+            first_user_message = sanitize_text(
+                str(row[4] or ""),
+                profile="strict",
+                max_length=240,
+            ) or None
+
+            thread = _get_or_create(thread_id, root_path, root_kind, priority, threads)
+
+            if (not thread.session_path or not Path(thread.session_path).exists()) and rollout_path:
+                thread.source_root_path = str(root_path)
+                thread.source_root_kind = root_kind
+                thread.session_path = rollout_path
+                thread.priority = min(thread.priority, priority)
+
+            if not thread.cwd and cwd:
+                thread.cwd = cwd
+            if not thread.first_user_message_excerpt and first_user_message:
+                thread.first_user_message_excerpt = first_user_message
+            if updated_at and _parse_updated_at(updated_at) >= _parse_updated_at(thread.updated_at):
+                thread.updated_at = updated_at
+
+
 def _merge_session_files(
     root_path: Path,
     root_kind: str,
@@ -224,6 +365,58 @@ def _merge_session_files(
             continue
 
         thread = _get_or_create(str(thread_id), root_path, root_kind, priority, threads)
+        if priority < thread.priority or not thread.session_path or not Path(thread.session_path).exists():
+            thread.source_root_path = str(root_path)
+            thread.source_root_kind = root_kind
+            thread.session_path = str(session_path)
+            thread.priority = priority
+            thread.cwd = thread.cwd or preview.get("cwd")
+            thread.first_user_message_excerpt = (
+                thread.first_user_message_excerpt or preview.get("first_user_message_excerpt")
+            )
+
+        updated_at = preview.get("updated_at") or _to_iso_from_datetime(
+            datetime.fromtimestamp(session_path.stat().st_mtime, timezone.utc)
+        )
+        if updated_at and _parse_updated_at(str(updated_at)) >= _parse_updated_at(thread.updated_at):
+            thread.updated_at = str(updated_at)
+
+        if not thread.preferred_title:
+            thread.preferred_title = thread.thread_id
+
+
+def _merge_session_files_by_id(
+    root_path: Path,
+    root_kind: str,
+    priority: int,
+    threads: dict[str, MutableThread],
+    thread_id: str,
+    include_archived_sources: bool,
+) -> None:
+    paths: list[Path] = []
+    sessions_root = root_path / "sessions"
+    if sessions_root.exists():
+        paths.extend(sorted(sessions_root.rglob(f"*{thread_id}*.jsonl")))
+
+    archived_sessions_root = root_path / "archived_sessions"
+    if include_archived_sources and archived_sessions_root.exists():
+        paths.extend(sorted(archived_sessions_root.glob(f"*{thread_id}*.jsonl")))
+
+    seen: set[str] = set()
+    for session_path in paths:
+        key = str(session_path).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        preview = _read_session_preview(session_path)
+        preview_thread_id = str(preview.get("thread_id") or "").strip()
+        if not preview_thread_id:
+            preview_thread_id = thread_id
+        if preview_thread_id.casefold() != thread_id.casefold():
+            continue
+
+        thread = _get_or_create(preview_thread_id, root_path, root_kind, priority, threads)
         if priority < thread.priority or not thread.session_path or not Path(thread.session_path).exists():
             thread.source_root_path = str(root_path)
             thread.source_root_kind = root_kind
@@ -279,6 +472,47 @@ def _merge_thread_read_files(
                 thread.updated_at
             ):
                 thread.updated_at = str(preview["updated_at"])
+
+
+def _merge_thread_read_files_by_id(
+    root_path: Path,
+    root_kind: str,
+    priority: int,
+    threads: dict[str, MutableThread],
+    thread_id: str,
+) -> None:
+    for thread_read_root in _enumerate_thread_read_roots(root_path):
+        thread_read_path = thread_read_root / f"{thread_id}.json"
+        if not thread_read_path.exists():
+            continue
+
+        preview = _read_thread_read_preview(thread_read_path)
+        preview_thread_id = str(preview.get("thread_id") or "").strip() or thread_id
+        if preview_thread_id.casefold() != thread_id.casefold():
+            continue
+
+        thread = _get_or_create(preview_thread_id, root_path, root_kind, priority, threads)
+        if priority < thread.priority or not thread.session_path or not Path(thread.session_path).exists():
+            thread.source_root_path = str(root_path)
+            thread.source_root_kind = root_kind
+            thread.session_path = str(thread_read_path)
+            thread.priority = priority
+
+        observed_name = sanitize_text(
+            str(preview.get("name") or ""),
+            profile="strict",
+            max_length=120,
+        )
+        _add_observed_thread_name(thread, observed_name, preview.get("updated_at"), "thread_reads")
+
+        if not thread.cwd and preview.get("cwd"):
+            thread.cwd = str(preview["cwd"])
+        if not thread.first_user_message_excerpt and preview.get("first_user_message_excerpt"):
+            thread.first_user_message_excerpt = str(preview["first_user_message_excerpt"])
+        if preview.get("updated_at") and _parse_updated_at(str(preview["updated_at"])) >= _parse_updated_at(
+            thread.updated_at
+        ):
+            thread.updated_at = str(preview["updated_at"])
 
 
 def _get_or_create(

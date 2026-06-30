@@ -115,6 +115,28 @@ class WorkerApiServerTests(unittest.TestCase):
                 self.assertEqual(job_payload["progress"]["percent"], 100)
                 self.assertEqual(job_payload["result"]["state"], "completed")
 
+                max_items_status, max_items_payload = handle_request(
+                    "POST",
+                    "/jobs",
+                    {
+                        "type": "refresh",
+                        "options": {
+                            "maxItems": 1,
+                        },
+                    },
+                )
+                self.assertEqual(max_items_status, 200)
+                max_items_job_id = max_items_payload["jobId"]
+                for _ in range(50):
+                    max_job_status, max_items_payload = handle_request("GET", f"/jobs/{max_items_job_id}", None)
+                    self.assertEqual(max_job_status, 200)
+                    if max_items_payload["state"] not in {"queued", "running"}:
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(max_items_payload["state"], "completed")
+                self.assertEqual(max_items_payload["progress"]["total"], 1)
+                self.assertEqual(max_items_payload["result"]["thread_count"], 1)
+
                 list_status, list_payload = handle_request(
                     "POST",
                     "/items/list",
